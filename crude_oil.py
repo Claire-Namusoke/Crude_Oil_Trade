@@ -25,15 +25,27 @@ if OPENAI_AVAILABLE:
     # Read API key from Streamlit Cloud secrets
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
-        client = OpenAI(api_key=api_key)
-        AI_ENABLED = True
-    except Exception as e:
-        # If secrets not configured, disable AI
+        if api_key and len(api_key) > 0:
+            client = OpenAI(api_key=api_key)
+            AI_ENABLED = True
+        else:
+            client = None
+            AI_ENABLED = False
+            st.error("🔑 OpenAI API key is empty in Streamlit secrets")
+    except KeyError:
+        # Key not found in secrets
         client = None
         AI_ENABLED = False
+        st.error("🔑 OPENAI_API_KEY not found in Streamlit Cloud secrets. Please add it in Settings → Secrets")
+    except Exception as e:
+        # Other initialization errors
+        client = None
+        AI_ENABLED = False
+        st.error(f"❌ OpenAI initialization failed: {str(e)}")
 else:
     client = None
     AI_ENABLED = False
+    st.error("❌ OpenAI library not installed")
 
 # --- Utility Functions ---
 
@@ -959,11 +971,6 @@ def test_openai_connection():
     return results
 
 # --- Load Data ---
-# Clear cache and reload data button
-if st.button("🔄 Clear Cache & Reload Data", key="clear_cache"):
-    st.cache_data.clear()
-    st.rerun()
-
 df, error = get_crude_oil_data()
 
 # --- Function to create dark theme plots ---
@@ -994,29 +1001,6 @@ def create_dark_theme_plot(fig):
 def main():
     # Header
     st.title("🌍 Global Crude Oil Trade Dashboard (1995-2021)")
-    
-    # Show AI status
-    if AI_ENABLED and client:
-        st.success("🤖 AI Assistant: Active")
-    else:
-        st.warning("⚠️ AI Assistant: Not Available - Please configure OPENAI_API_KEY in Streamlit Cloud secrets")
-        with st.expander("ℹ️ How to add OpenAI API Key to Streamlit Cloud"):
-            st.markdown("""
-            **To enable AI features on the deployed app:**
-            
-            1. Go to your Streamlit Cloud dashboard: https://share.streamlit.io/
-            2. Click on your app: **Crude Oil Trade Dashboard**
-            3. Click the **⚙️ Settings** button (three dots menu)
-            4. Go to **Secrets** section
-            5. Add the following:
-            ```toml
-            OPENAI_API_KEY = "your-openai-api-key-here"
-            ```
-            6. Click **Save**
-            7. The app will automatically restart with AI enabled!
-            
-            **Note:** Your local version works because you have the key in `.streamlit/secrets.toml`
-            """)
     
     # Check for data loading errors
     if error:
