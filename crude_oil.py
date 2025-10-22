@@ -15,12 +15,8 @@ import subprocess
 try:
     import openai
     from openai import OpenAI
-    from langchain.agents import create_pandas_dataframe_agent
-    from langchain_openai import ChatOpenAI
-    LANGCHAIN_AVAILABLE = True
     OPENAI_AVAILABLE = True
 except ImportError:
-    LANGCHAIN_AVAILABLE = False
     OPENAI_AVAILABLE = False
     st.warning("⚠️ AI libraries not installed. AI features will use fallback analysis.")
 
@@ -29,18 +25,205 @@ if OPENAI_AVAILABLE:
     # Try Streamlit secrets first, then fall back to environment variable
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
-    except:
-        api_key = os.getenv('OPENAI_API_KEY')
-    
-    if api_key:
         client = OpenAI(api_key=api_key)
         AI_ENABLED = True
-    else:
-        client = None
-        AI_ENABLED = False
+    except:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if api_key:
+            client = OpenAI(api_key=api_key)
+            AI_ENABLED = True
+        else:
+            client = None
+            AI_ENABLED = False
 else:
     client = None
     AI_ENABLED = False
+
+# --- Utility Functions ---
+
+# Regional mapping for African countries
+region_map = {
+    "west africa": ["Nigeria", "Ghana", "Senegal", "Côte d'Ivoire", "Sierra Leone", "Liberia", "Togo", "Benin", "Gambia", "Cape Verde", "Guinea", "Guinea-Bissau"],
+    "east africa": ["Kenya", "Uganda", "Tanzania", "Ethiopia", "Somalia", "Rwanda", "Burundi", "Sudan", "Eritrea", "Djibouti", "South Sudan"],
+    "north africa": ["Egypt", "Libya", "Algeria", "Morocco", "Tunisia", "Mauritania"],
+    "southern africa": ["South Africa", "Namibia", "Botswana", "Zimbabwe", "Zambia", "Lesotho", "Eswatini", "Malawi", "Angola"],
+    "central africa": ["Cameroon", "Congo", "Gabon", "Chad", "Equatorial Guinea", "Central African Republic", "Democratic Republic of the Congo"],
+}
+
+def format_human_readable(value):
+    """Convert large numbers into human-readable format: K/M/B/T"""
+    if pd.isna(value) or value == 0:
+        return "$0"
+    
+    abs_value = abs(value)
+    sign = "-" if value < 0 else ""
+    
+    if abs_value >= 1e12:
+        return f"{sign}${abs_value/1e12:.2f}T"
+    elif abs_value >= 1e9:
+        return f"{sign}${abs_value/1e9:.2f}B"
+    elif abs_value >= 1e6:
+        return f"{sign}${abs_value/1e6:.2f}M"
+    elif abs_value >= 1e3:
+        return f"{sign}${abs_value/1e3:.2f}K"
+    else:
+        return f"{sign}${abs_value:.2f}"
+
+system_prompt = """
+You are a data reasoning assistant specializing in crude oil trade data. 
+You can interpret complex questions about countries, continents, years, or time ranges.
+
+Your goal:
+- Understand exactly what the user is asking, even if phrased in different natural language forms.
+- Always filter and reason strictly using the dataset provided — never guess or make up data.
+- Identify key question entities such as:
+  - Specific country names (e.g., Nigeria, China, United States)
+  - Continents (e.g., Africa, Europe, Asia)
+  - Year or range (e.g., 2000, between 2000 and 2008)
+  - Import or Export context
+
+Rules for answering:
+1. Filter the dataset based on what the question asks for (continent/country/year/import/export).
+2. If the question says "between [year1] and [year2]", analyze and summarize across that range.
+3. If the question says "which country imported less in Africa", compare *only African countries* for that year.
+4. If the user doesn’t specify, clarify assumptions explicitly (e.g., "Assuming you mean total exports for Africa in 2000...").
+5. Return **only clear human-readable results**, like:
+   Nigeria in 2000: $22.4B exports.
+   South Africa in 2000: $4.8B imports.
+6. Always use the correct unit (K, M, B, or T) — the dataset already includes trade values that should be scaled using the format_human_readable() function.
+7. Never include markdown symbols like **, *, or backticks — output should be clean and plain text.
+8. When comparing, show concise context:
+   “Trade decreased by 11.1% between 2000 and 2001” (not long paragraphs).
+
+Be direct, precise, and intelligent in reasoning — think like a professional data analyst who fully understands the dataset.
+"""
+
+# ------------------------
+# Function to answer any user question
+# ------------------------
+def answer_question(user_question, df):
+    """
+    This function interprets user questions about crude oil trade,
+    performs accurate calculations on the full DataFrame,
+    and uses AI to format the explanation and natural-language response.
+    """
+    question_lower = user_question.lower()
+    
+    # Initialize result dictionary
+    result = {}
+
+    # Detect year(s) in question
+    years = [int(token) for token in user_question.split() if token.isdigit() and len(token) == 4]
+    
+    # Detect continent keywords
+    continents = ["Africa", "Europe", "Asia", "North America", "South America", "Oceania"]
+    continent = None
+    for cont in continents:
+        if cont.lower() in question_lower:
+            continent = cont
+
+    # ------------------------
+    # Determine query type: lowest/highest/total/comparison
+    # ------------------------
+    df_filtered = df.copy()
+    
+    if continent:
+        df_filtered = df_filtered[df_filtered["Continent"] == continent]
+    if years:
+        df_filtered = df_filtered[df_filtered["Year"].isin(years)]
+
+    # Handle 'lowest imports'
+    if "lowest" in question_lower and "import" in question_lower:
+        imports_df = df_filtered[df_filtered['Action'] == 'Import']
+        if not imports_df.empty:
+            country_imports = imports_df.groupby('Country')['TradeValue'].sum()
+            min_country = country_imports.idxmin()
+            min_value = country_imports.min()
+            result = {
+                "Country": min_country,
+                "Value": format_human_readable(min_value),
+                "Type": "Lowest Imports"
+            }
+    
+    # Handle 'highest exports'
+    elif "highest" in question_lower and "export" in question_lower:
+        exports_df = df_filtered[df_filtered['Action'] == 'Export']
+        if not exports_df.empty:
+            country_exports = exports_df.groupby('Country')['TradeValue'].sum()
+            max_country = country_exports.idxmax()
+            max_value = country_exports.max()
+            result = {
+                "Country": max_country,
+                "Value": format_human_readable(max_value),
+                "Type": "Highest Exports"
+            }
+    
+    # Handle 'total trade between years'
+    elif "total trade" in question_lower or "trade value" in question_lower:
+        total = df_filtered["TradeValue"].sum()
+        result = {
+            "Value": format_human_readable(total),
+            "Years": f"{min(years)}-{max(years)}" if years else "All available years",
+            "Type": "Total Trade"
+        }
+    
+    # Handle generic comparisons or trends
+    elif "compare" in question_lower or "trend" in question_lower or "change" in question_lower:
+        if len(years) >= 2:
+            values = []
+            for y in years:
+                temp = df_filtered[df_filtered["Year"] == y]
+                total = temp["TradeValue"].sum()
+                values.append((y, total))
+            # calculate change
+            change = values[-1][1] - values[0][1]
+            pct_change = (change / values[0][1]) * 100 if values[0][1] != 0 else 0
+            result = {
+                "StartYear": values[0][0],
+                "EndYear": values[-1][0],
+                "StartValue": format_human_readable(values[0][1]),
+                "EndValue": format_human_readable(values[-1][1]),
+                "Change": format_human_readable(change),
+                "PercentChange": f"{pct_change:.1f}%",
+                "Type": "Trend/Comparison"
+            }
+    
+    else:
+        # Fallback: Provide dataset summary
+        total_trade = df_filtered["TradeValue"].sum()
+        countries = df_filtered["Country"].nunique()
+        result = {
+            "Type": "Summary",
+            "TotalTrade": format_human_readable(total_trade),
+            "CountriesCovered": countries
+        }
+
+    # ------------------------
+    # Send result to AI for natural-language explanation
+    # ------------------------
+    if AI_ENABLED and client:
+        prompt = f"""
+        {system_prompt}
+
+        User question: {user_question}
+
+        Data result: {result}
+
+        Provide a clear, human-readable answer explaining the result.
+        """
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            return f"AI processing error: {str(e)}. Raw result: {result}"
+    else:
+        return f"AI not available. Raw result: {result}"
+
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -743,6 +926,7 @@ def test_openai_connection():
     
     # Test 3: Test API connection with a simple request
     try:
+        # Test with the new OpenAI client format
         test_client = OpenAI(api_key=api_key)
         
         # Test with a very simple completion
@@ -752,8 +936,7 @@ def test_openai_connection():
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Say hello"}
             ],
-            max_tokens=10,
-            timeout=10
+            max_tokens=10
         )
         
         if response and response.choices:
@@ -904,11 +1087,8 @@ def main():
     with col2:
         total_trade = filtered_df['TradeValue'].sum()
         
-        # Format trade value in billions or trillions
-        if total_trade >= 1e12:
-            trade_value_formatted = f"${total_trade / 1e12:.2f}T"
-        else:
-            trade_value_formatted = f"${total_trade / 1e9:.1f}B"
+        # Format trade value using human-readable format
+        trade_value_formatted = format_human_readable(total_trade)
             
         st.markdown(f"""
         <div style='text-align: center; padding: 6px;'>
@@ -1017,15 +1197,8 @@ def main():
             total_trade = import_total + export_total
             
             # Format values
-            if import_total >= 1e12:
-                import_formatted = f"${import_total / 1e12:.2f}T"
-            else:
-                import_formatted = f"${import_total / 1e9:.1f}B"
-                
-            if export_total >= 1e12:
-                export_formatted = f"${export_total / 1e12:.2f}T"
-            else:
-                export_formatted = f"${export_total / 1e9:.1f}B"
+            import_formatted = format_human_readable(import_total)
+            export_formatted = format_human_readable(export_total)
             
             # Display metrics in a clean layout
             col_a, col_b = st.columns(2)
@@ -1062,10 +1235,7 @@ def main():
                 balance_text = "Trade Deficit"
                 balance_icon = ""
             
-            if abs(trade_balance) >= 1e12:
-                balance_formatted = f"${abs(trade_balance) / 1e12:.2f}T"
-            else:
-                balance_formatted = f"${abs(trade_balance) / 1e9:.1f}B"
+            balance_formatted = format_human_readable(abs(trade_balance))
             
             # Create two columns for balance and insights
             col_balance, col_insights = st.columns(2)
@@ -1164,7 +1334,7 @@ def main():
                 {'selector': 'th', 'props': [('background-color', '#333333'), ('color', 'white'), ('border', '1px solid #555555')]}
             ])
             
-            st.dataframe(styled_importers, width='stretch')
+            st.dataframe(styled_importers, use_container_width=True)
         else:
             st.info("No import data available for the selected filters.")
     
@@ -1209,7 +1379,7 @@ def main():
                 {'selector': 'th', 'props': [('background-color', '#333333'), ('color', 'white'), ('border', '1px solid #555555')]}
             ])
             
-            st.dataframe(styled_exporters, width='stretch')
+            st.dataframe(styled_exporters, use_container_width=True)
         else:
             st.info("No export data available for the selected filters.")
     
@@ -1838,11 +2008,11 @@ def main():
         key="ai_input"
     )
     
-    if user_question:
+    if st.button("Get Answer") and user_question:
         with st.spinner("🧠 Analyzing your question..."):
             try:
-                # Use the original unfiltered dataframe for AI analysis
-                ai_response = get_ai_response(user_question, df)
+                # Use the answer_question function for AI analysis
+                ai_response = answer_question(user_question, df)
                 
                 st.markdown("### 💬 Answer:")
                 st.markdown(f"**Question:** {user_question}")
@@ -1884,17 +2054,14 @@ def get_ai_response(question, dataframe):
     """
     Generate AI response using LangChain pandas agent (much more reliable!)
     """
-    # Use LangChain if available
-    if LANGCHAIN_AVAILABLE and AI_ENABLED and client:
+    # Use Haystack if available
+    # Use the new answer_question function
+    if AI_ENABLED:
         try:
-            return get_langchain_response(question, dataframe)
+            return answer_question(question, dataframe)
         except Exception as e:
-            st.warning(f"LangChain failed ({str(e)}), using OpenAI fallback...")
-            try:
-                return get_openai_response(question, dataframe)
-            except Exception as e2:
-                st.warning(f"OpenAI also failed ({str(e2)}), using basic analysis...")
-                return get_basic_response(question, dataframe)
+            st.warning(f"AI analysis failed ({str(e)}), using basic analysis...")
+            return get_basic_response(question, dataframe)
     
     # Use basic pandas analysis as fallback
     try:
@@ -1902,46 +2069,917 @@ def get_ai_response(question, dataframe):
     except Exception as e:
         return f"Sorry, I couldn't analyze that question: {str(e)}"
 
-def get_langchain_response(question, dataframe):
+def get_haystack_response(question, dataframe):
     """
-    Use LangChain pandas dataframe agent - much more reliable than our manual approach!
+    Intelligent AI assistant that carefully analyzes user questions and provides comprehensive answers
     """
-    # Create LangChain ChatOpenAI instance
-    llm = ChatOpenAI(
-        api_key=client.api_key,
-        model="gpt-3.5-turbo",
-        temperature=0.1
-    )
-    
-    # Create pandas dataframe agent
-    agent = create_pandas_dataframe_agent(
-        llm,
-        dataframe,
-        verbose=False,
-        return_intermediate_steps=False,
-        allow_dangerous_code=True  # Required for pandas operations
-    )
-    
-    # Enhanced prompt for better responses
-    enhanced_question = f"""
-    Answer this question about the crude oil trade data: {question}
-    
-    Guidelines:
-    - Be direct and specific
-    - Use clean formatting like $2.134T USD instead of long numbers
-    - If asking about specific countries/years, give the exact answer first
-    - Keep responses concise and focused on what was asked
-    - The data covers years 1995-2021 with Import/Export actions
+    try:
+        # Use the enhanced intelligent analyzer
+        return intelligent_dataframe_analyzer(question, dataframe)
+        
+    except Exception as e:
+        return f"I encountered an error while analyzing your question: {str(e)}. Please try rephrasing your question."
+
+def intelligent_dataframe_analyzer(question, dataframe):
     """
+    Expert Data Analyst AI System with Context-Aware Analysis:
     
-    # Get response from agent
-    response = agent.invoke(enhanced_question)
+    Enhanced with full dataset context for improved accuracy.
+    Filters DataFrame first, then provides natural-language answers with complete dataset context.
+    """
+    try:
+        # Use context-aware analysis for better accuracy
+        if AI_ENABLED:
+            return context_aware_analysis(question, dataframe)
+        else:
+            # Fallback to enhanced rule-based analysis
+            return rule_based_intelligent_analysis(question, dataframe)
+        
+    except Exception as e:
+        return f"I encountered an error analyzing your question: {str(e)}. Please try asking in a different way."
+
+def context_aware_analysis(user_question, dataframe):
+    """
+    Context-aware AI analysis that provides full dataset context for improved accuracy.
+    Filters the DataFrame first, then forms natural-language answers with complete context.
+    """
+    try:
+        # Step 1: Pre-filter the dataset based on the question
+        filtered_df = pre_filter_dataset(user_question, dataframe)
+        
+        # Step 2: Convert filtered dataset to context format
+        if len(filtered_df) > 100:  # Limit context size for large datasets
+            # Sample strategically: recent years + top countries by trade value
+            recent_years = filtered_df[filtered_df['Year'] >= 2015]
+            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(20).index
+            top_country_data = filtered_df[filtered_df['Country'].isin(top_countries)]
+            context_df = pd.concat([recent_years, top_country_data]).drop_duplicates()
+        else:
+            context_df = filtered_df
+            
+        # Convert to dictionary format for context
+        context = context_df.to_dict(orient='records')
+        
+        # Step 3: Create comprehensive system prompt
+        system_prompt = """
+You are an expert, careful data analyst working only with the dataset provided in the "Dataset context" section. Your job is to interpret the user's natural-language question about the dataset, extract the intent precisely, compute or retrieve the exact answer from the dataset context, and return a short, direct, and accurate response. Do NOT invent facts or use outside knowledge.
+
+Rules (apply these strictly):
+1. Always extract explicit entities (country, region, continent), numeric filters (years or ranges), and operation intent (sum/total, compare/difference, trend, top-k, average, min/max, raw lookup).
+2. If a country or region name appears in the user's question, prefer an **exact string match** (case-insensitive) to the dataset. If exact match fails, do a fuzzy match only as a fallback and **state** that you used a fuzzy match.
+3. When the question uses the word "total", "sum", "overall", or asks "between X and Y" with no comparison word (change/increase/decrease), treat it as a **sum across all years in that inclusive range**.
+4. When the question includes words like "change", "difference", "increase", "decrease", "compare", "growth", treat it as a **comparison between the first and last year** (or between explicitly requested years).
+5. For ambiguous questions, first try to disambiguate by exact matching and intent detection; if still ambiguous, ask a single concise clarifying question (only if absolutely necessary). Otherwise, choose the most likely interpretation and state your assumption briefly.
+6. Use only the values present in the provided dataset context. If the requested data is missing for part of the query, explicitly say which part is missing.
+7. Always format numeric currency outputs with the dataset's units (K, M, B, T) as provided in the context, or format them using the rules: K = thousand, M = million, B = billion, T = trillion. Show 2 decimal places for scaled values (e.g., $1.23M USD).
+8. When returning results, produce a very short answer (1–3 sentences) that includes: the country/region, the year(s) or period, the number(s) + unit, and a single-sentence interpretation if applicable (e.g., percent change).
+9. If multiple rows match a query (e.g., asking for "top exporters in 2000"), return the top N results only (user may specify N; otherwise default to top 5) and state the metric and ordering rule used.
+10. If user asks for raw data rows or entire dataframe snippets, return a concise table-formatted snippet (max 10 rows) and say where to fetch the rest.
+
+Dataset context contains fields: Country, Continent, Year, Action (Export/Import), TradeValue (in USD).
+"""
+
+        # Step 4: Create the full prompt with context
+        prompt = f"""
+{system_prompt}
+
+Here is the filtered dataset context (most relevant records for your query):
+{context}
+
+User question: {user_question}
+
+Answer (be direct, precise, and follow the rules above):
+"""
+
+        # Step 5: Get AI response
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert data analyst. Analyze the provided dataset context and answer the user's question accurately and concisely."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.1
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        # Fallback to rule-based analysis
+        return rule_based_intelligent_analysis(user_question, dataframe)
+
+def pre_filter_dataset(question, dataframe):
+    """
+    Pre-filter the dataset based on the user's question to provide relevant context.
+    """
+    import re
     
-    # Extract the answer from the response
-    if isinstance(response, dict) and 'output' in response:
-        return response['output']
+    question_lower = question.lower()
+    filtered_df = dataframe.copy()
+    
+    # Extract entities from question
+    countries = extract_countries_from_query(question_lower, dataframe)
+    years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', question_lower)]
+    
+    # Filter by countries if mentioned
+    if countries:
+        filtered_df = filtered_df[filtered_df['Country'].isin(countries)]
+    
+    # Filter by years if mentioned
+    if years:
+        if len(years) == 1:
+            filtered_df = filtered_df[filtered_df['Year'] == years[0]]
+        elif len(years) >= 2:
+            start_year, end_year = min(years), max(years)
+            filtered_df = filtered_df[
+                (filtered_df['Year'] >= start_year) & 
+                (filtered_df['Year'] <= end_year)
+            ]
+    
+    # Filter by action type if mentioned
+    if 'export' in question_lower and 'import' not in question_lower:
+        filtered_df = filtered_df[filtered_df['Action'] == 'Export']
+    elif 'import' in question_lower and 'export' not in question_lower:
+        filtered_df = filtered_df[filtered_df['Action'] == 'Import']
+    
+    # If no specific filtering was applied, limit to recent years for context efficiency
+    if len(countries) == 0 and len(years) == 0:
+        # Include last 10 years + top 20 countries by total trade value
+        recent_years = filtered_df[filtered_df['Year'] >= (filtered_df['Year'].max() - 9)]
+        top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(20).index
+        top_country_data = filtered_df[filtered_df['Country'].isin(top_countries)]
+        filtered_df = pd.concat([recent_years, top_country_data]).drop_duplicates()
+    
+    return filtered_df
+
+def rule_based_intelligent_analysis(question, dataframe):
+    """
+    Enhanced rule-based analysis system (fallback when AI is not available).
+    
+    CORE PRINCIPLES:
+    1. Extract explicit entities (country, region, continent), numeric filters (years/ranges), and operation intent precisely
+    2. Use ONLY dataset values - never invent facts or use outside knowledge
+    3. Prefer exact string matches (case-insensitive) for countries/regions; state if using fuzzy matching
+    4. Format currency with K/M/B/T units, 2 decimal places (e.g., $1.23B USD)
+    5. Return 1-3 sentences maximum with country/region, year(s), number(s) + unit
+    
+    YEAR RANGE LOGIC:
+    6. "total"/"sum"/"overall"/"between X and Y" (no comparison words) → Sum across ALL years in range
+    7. "change"/"difference"/"increase"/"decrease"/"compare"/"growth" → Compare FIRST vs LAST year only
+    8. For ambiguous queries, choose most likely interpretation and state assumption
+    
+    DATA INTEGRITY:
+    9. Always specify country and years explicitly in response
+    10. State clearly if requested data is missing from dataset
+    11. For top-N queries, default to top 5 unless specified, show metric and ordering
+    12. No global assumptions unless explicitly requested by user
+    """
+    try:
+        # Step 1: Carefully read and parse the user's question
+        question_lower = question.lower().strip()
+        
+        # Step 2: Identify what the question is asking for
+        analysis_intent = identify_question_intent(question_lower, dataframe)
+        
+        if not analysis_intent['valid']:
+            return analysis_intent['message']
+        
+        # Step 3 & 4: Use dataset information and provide clear explanations
+        result = execute_intelligent_analysis(analysis_intent, dataframe)
+        
+        return result
+        
+    except Exception as e:
+        return f"I encountered an error analyzing your question: {str(e)}. Please try asking in a different way."
+
+def identify_question_intent(question_lower, dataframe):
+    """
+    Step 1 & 2: Carefully analyze the question and identify the intent
+    """
+    import re
+    
+    # Extract key components
+    countries = extract_countries_from_query(question_lower, dataframe)
+    continents = extract_continents_from_query(question_lower, dataframe)
+    years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', question_lower)]
+    
+    # Enhanced intent detection with operation types
+    intent = {
+        'valid': True,
+        'type': None,
+        'countries': countries,
+        'continents': continents,
+        'years': years,
+        'action': None,  # Export, Import, or Both
+        'operation': None,  # sum, compare, trend, top-k, average, min-max, lookup
+        'comparison': False,
+        'ranking': False,
+        'specific_data': False,
+        'temporal_analysis': False,
+        'original_question': question_lower,
+        'exact_match': True,  # Track if exact country match was used
+        'message': ''
+    }
+    
+    # Determine action type
+    if 'export' in question_lower and 'import' not in question_lower:
+        intent['action'] = 'Export'
+    elif 'import' in question_lower and 'export' not in question_lower:
+        intent['action'] = 'Import'
+    elif 'export' in question_lower and 'import' in question_lower:
+        intent['action'] = 'Both'
+    elif 'trade' in question_lower:
+        intent['action'] = 'Both'
     else:
-        return str(response)
+        intent['action'] = 'Both'  # Default to both if unclear
+    
+    # Determine operation type based on keywords
+    if any(word in question_lower for word in ['total', 'sum', 'overall', 'combined']) and not any(word in question_lower for word in ['change', 'difference', 'increase', 'decrease']):
+        intent['operation'] = 'sum'
+    elif any(word in question_lower for word in ['change', 'difference', 'increase', 'decrease', 'compare', 'growth', 'versus', 'vs']):
+        intent['operation'] = 'compare'
+    elif any(word in question_lower for word in ['trend', 'over time', 'pattern']):
+        intent['operation'] = 'trend'
+    elif any(word in question_lower for word in ['top', 'highest', 'most', 'bottom', 'lowest', 'least', 'rank']):
+        intent['operation'] = 'top-k'
+    elif any(word in question_lower for word in ['average', 'mean']):
+        intent['operation'] = 'average'
+    elif any(word in question_lower for word in ['minimum', 'maximum', 'min', 'max']):
+        intent['operation'] = 'min-max'
+    else:
+        intent['operation'] = 'lookup'  # Default raw data lookup
+    
+    # Identify question patterns
+    if any(word in question_lower for word in ['which country', 'what country', 'highest', 'lowest', 'most', 'least', 'top', 'bottom']):
+        intent['type'] = 'ranking'
+        intent['ranking'] = True
+        
+    elif any(word in question_lower for word in ['compare', 'comparison', 'versus', 'vs', 'difference', 'between']):
+        intent['type'] = 'comparison'
+        intent['comparison'] = True
+        
+    elif any(word in question_lower for word in ['trend', 'growth', 'increase', 'decrease', 'change', 'over time']):
+        intent['type'] = 'temporal'
+        intent['temporal_analysis'] = True
+        
+    elif countries or continents or years:
+        intent['type'] = 'specific_query'
+        intent['specific_data'] = True
+        
+    elif any(word in question_lower for word in ['total', 'sum', 'global', 'world', 'overall']):
+        intent['type'] = 'aggregate'
+        
+    else:
+        intent['type'] = 'general'
+    
+    return intent
+
+def extract_continents_from_query(query_lower, dataframe):
+    """
+    Extract continent names from the query.
+    Also handles African regional queries by returning 'Africa' as the continent.
+    """
+    continents_in_data = dataframe['Continent'].unique()
+    found_continents = []
+    
+    # Check for African regional queries first
+    african_regions = ["west africa", "east africa", "north africa", "southern africa", "central africa"]
+    for region in african_regions:
+        if region in query_lower:
+            if 'Africa' in continents_in_data:
+                found_continents.append('Africa')
+                return found_continents  # Return early for regional queries
+    
+    continent_aliases = {
+        'africa': 'Africa', 'african': 'Africa',
+        'asia': 'Asia', 'asian': 'Asia',
+        'europe': 'Europe', 'european': 'Europe',
+        'america': 'America', 'americas': 'America',
+        'north america': 'North America', 'south america': 'South America'
+    }
+    
+    for alias, continent in continent_aliases.items():
+        if alias in query_lower and continent in continents_in_data:
+            found_continents.append(continent)
+    
+    return found_continents
+
+def execute_intelligent_analysis(intent, dataframe):
+    """
+    Steps 3, 4, 5: Execute analysis using dataset info, provide clear explanations, handle missing data
+    """
+    df = dataframe.copy()
+    
+    try:
+        if intent['type'] == 'ranking':
+            return handle_ranking_questions(intent, df)
+            
+        elif intent['type'] == 'comparison':
+            return handle_comparison_questions(intent, df)
+            
+        elif intent['type'] == 'temporal':
+            return handle_temporal_questions(intent, df)
+            
+        elif intent['type'] == 'specific_query':
+            return handle_specific_queries(intent, df)
+            
+        elif intent['type'] == 'aggregate':
+            return handle_aggregate_questions(intent, df)
+            
+        else:
+            return handle_general_questions(intent, df)
+            
+    except Exception as e:
+        return f"I couldn't complete the analysis due to: {str(e)}. Please try rephrasing your question."
+
+def handle_ranking_questions(intent, df):
+    """Handle 'which country has highest...' type questions"""
+    action_text = intent['action'].lower()
+    year_filter = intent['years'][0] if intent['years'] else None
+    
+    # Filter data based on action
+    if intent['action'] == 'Export':
+        filtered_df = df[df['Action'] == 'Export']
+    elif intent['action'] == 'Import':
+        filtered_df = df[df['Action'] == 'Import']
+    else:
+        filtered_df = df
+    
+    # Apply year filter if specified
+    if year_filter:
+        filtered_df = filtered_df[filtered_df['Year'] == year_filter]
+        year_text = f" in {year_filter}"
+        
+        if filtered_df.empty:
+            return f"I don't have any {action_text} data for {year_filter} in the dataset. The available years are {df['Year'].min()}-{df['Year'].max()}."
+    else:
+        year_text = " (1995-2021)"
+    
+    if filtered_df.empty:
+        return f"I don't have any {action_text} data matching your criteria."
+    
+    # Calculate rankings
+    country_totals = filtered_df.groupby('Country')['TradeValue'].sum().sort_values(ascending=False)
+    
+    if country_totals.empty:
+        return f"No {action_text} data is available for the specified criteria."
+    
+    # Extract top N (default 5 unless specified)
+    import re
+    top_n_match = re.search(r'top\s+(\d+)', intent['original_question'])
+    n = int(top_n_match.group(1)) if top_n_match else 5
+    
+    top_countries = country_totals.head(n)
+    top_country = top_countries.index[0]
+    top_value = top_countries.iloc[0]
+    
+    # Build precise, rule-compliant response
+    year_specific = f" in {year_filter}" if year_filter else " (1995-2021)"
+    
+    if len(top_countries) == 1 or 'which country' in intent['original_question'] or 'highest' in intent['original_question']:
+        # Single result response
+        if intent['action'] == 'Export':
+            explanation = f"**{top_country}** had the highest exports{year_specific}: {format_human_readable(top_value)}."
+        elif intent['action'] == 'Import':
+            explanation = f"**{top_country}** had the highest imports{year_specific}: {format_human_readable(top_value)}."
+        else:
+            explanation = f"**{top_country}** had the highest total trade{year_specific}: {format_human_readable(top_value)}."
+    else:
+        # Multiple results response
+        explanation = f"**Top {n} {action_text.lower()}{year_specific} (by TradeValue, descending):** "
+        for i, (country, value) in enumerate(top_countries.items(), 1):
+            explanation += f"{i}. {country} ({format_human_readable(value)})"
+            if i < len(top_countries):
+                explanation += ", "
+        explanation += "."
+    
+    return explanation
+
+def handle_specific_queries(intent, df):
+    """Handle specific country/continent/year queries"""
+    result_parts = []
+    
+    # Process each country or continent
+    entities = intent['countries'] + intent['continents']
+    
+    if not entities and not intent['years']:
+        return "I need more specific information. Please mention a country, continent, or year to analyze."
+    
+    for entity in entities:
+        # Check if it's a country or continent
+        if entity in df['Country'].values:
+            entity_data = df[df['Country'] == entity]
+            entity_type = "country"
+        elif entity in df['Continent'].values:
+            entity_data = df[df['Continent'] == entity]
+            entity_type = "continent"
+        else:
+            continue
+            
+        # Apply year filters
+        if intent['years']:
+            if len(intent['years']) == 1:
+                year = intent['years'][0]
+                entity_data = entity_data[entity_data['Year'] == year]
+                time_text = f" in {year}"
+            elif len(intent['years']) >= 2:
+                start_year, end_year = min(intent['years']), max(intent['years'])
+                entity_data = entity_data[
+                    (entity_data['Year'] >= start_year) & 
+                    (entity_data['Year'] <= end_year)
+                ]
+                time_text = f" from {start_year} to {end_year}"
+            else:
+                time_text = ""
+        else:
+            time_text = " (1995-2021)"
+        
+        if entity_data.empty:
+            result_parts.append(f"No data is available for {entity}{time_text}.")
+            continue
+        
+        # Apply operation-specific calculation based on enhanced rules
+        if intent['operation'] == 'sum' and len(intent['years']) >= 2:
+            # Sum across all years in range
+            if intent['action'] == 'Export':
+                total_value = entity_data[entity_data['Action'] == 'Export']['TradeValue'].sum()
+                action_text = "exports"
+            elif intent['action'] == 'Import':
+                total_value = entity_data[entity_data['Action'] == 'Import']['TradeValue'].sum()
+                action_text = "imports"
+            else:
+                total_value = entity_data['TradeValue'].sum()
+                action_text = "total trade"
+                
+        elif intent['operation'] == 'compare' and len(intent['years']) >= 2:
+            # Compare first vs last year only
+            years_sorted = sorted(intent['years'])
+            first_year, last_year = years_sorted[0], years_sorted[-1]
+            
+            first_data = entity_data[entity_data['Year'] == first_year]
+            last_data = entity_data[entity_data['Year'] == last_year]
+            
+            if first_data.empty or last_data.empty:
+                result_parts.append(f"Insufficient data to compare **{entity}** between {first_year} and {last_year}.")
+                continue
+                
+            if intent['action'] == 'Export':
+                first_val = first_data[first_data['Action'] == 'Export']['TradeValue'].sum()
+                last_val = last_data[last_data['Action'] == 'Export']['TradeValue'].sum()
+                action_text = "exports"
+            elif intent['action'] == 'Import':
+                first_val = first_data[first_data['Action'] == 'Import']['TradeValue'].sum()
+                last_val = last_data[last_data['Action'] == 'Import']['TradeValue'].sum()
+                action_text = "imports"
+            else:
+                first_val = first_data['TradeValue'].sum()
+                last_val = last_data['TradeValue'].sum()
+                action_text = "trade"
+                
+            if first_val == 0:
+                result_parts.append(f"No {action_text} data for **{entity}** in {first_year}.")
+                continue
+                
+            change = last_val - first_val
+            change_pct = (change / first_val) * 100
+            direction = "increased" if change > 0 else "decreased"
+            
+            explanation = f"**{entity}** {action_text} {direction} from {first_year} to {last_year}: {format_human_readable(abs(change))} ({abs(change_pct):.1f}%)."
+            result_parts.append(explanation)
+            continue
+            
+        else:
+            # Standard lookup/calculation
+            if intent['action'] == 'Export':
+                total_value = entity_data[entity_data['Action'] == 'Export']['TradeValue'].sum()
+                action_text = "exports"
+            elif intent['action'] == 'Import':
+                total_value = entity_data[entity_data['Action'] == 'Import']['TradeValue'].sum()
+                action_text = "imports"
+            else:
+                total_value = entity_data['TradeValue'].sum()
+                action_text = "total trade"
+        
+        # Build rule-compliant response
+        explanation = f"**{entity}**{time_text}: {format_human_readable(total_value)} {action_text}."
+        
+        result_parts.append(explanation)
+    
+    return " ".join(result_parts) if result_parts else "No data found for the specified criteria."
+
+def handle_aggregate_questions(intent, df):
+    """Handle global/total questions"""
+    year_filter_text = ""
+    
+    # Apply year filtering
+    if intent['years']:
+        if len(intent['years']) == 1:
+            year = intent['years'][0]
+            df = df[df['Year'] == year]
+            year_filter_text = f" in {year}"
+        elif len(intent['years']) >= 2:
+            start_year, end_year = min(intent['years']), max(intent['years'])
+            df = df[(df['Year'] >= start_year) & (df['Year'] <= end_year)]
+            year_filter_text = f" from {start_year} to {end_year}"
+    else:
+        year_filter_text = " (1995-2021)"
+    
+    if df.empty:
+        return f"No data is available for the specified time period."
+    
+    # Calculate global totals
+    total_exports = df[df['Action'] == 'Export']['TradeValue'].sum()
+    total_imports = df[df['Action'] == 'Import']['TradeValue'].sum()
+    total_trade = total_exports + total_imports
+    
+    explanation = f"**Global Crude Oil Trade{year_filter_text}:**\n"
+    explanation += f"• Total Trade Value: ${total_trade/1e12:.3f} trillion USD\n"
+    explanation += f"• Total Exports: ${total_exports/1e12:.3f} trillion USD\n"
+    explanation += f"• Total Imports: ${total_imports/1e12:.3f} trillion USD\n"
+    explanation += f"• Number of Countries: {df['Country'].nunique()}\n"
+    explanation += f"• Number of Records: {len(df):,}"
+    
+    return explanation
+
+def handle_general_questions(intent, df):
+    """Handle general questions about the dataset"""
+    total_records = len(df)
+    countries = df['Country'].nunique()
+    continents = df['Continent'].nunique() 
+    years = f"{df['Year'].min()}-{df['Year'].max()}"
+    total_value = df['TradeValue'].sum()
+    
+    explanation = f"**Crude Oil Trade Dataset Overview:**\n"
+    explanation += f"• Time Period: {years}\n"
+    explanation += f"• Total Records: {total_records:,}\n"
+    explanation += f"• Countries Covered: {countries}\n"
+    explanation += f"• Continents Covered: {continents}\n"
+    explanation += f"• Total Trade Value: ${total_value/1e12:.3f} trillion USD\n\n"
+    explanation += "You can ask me about:\n"
+    explanation += "• Specific countries or years (e.g., 'Nigeria exports in 2004')\n"
+    explanation += "• Rankings (e.g., 'Which country has the highest exports?')\n"
+    explanation += "• Comparisons (e.g., 'Compare trade between 2000 and 2010')\n"
+    explanation += "• Trade patterns and trends"
+    
+    return explanation
+
+def analyze_dataframe_query(question, dataframe):
+    """
+    Legacy function - now redirects to the intelligent analyzer
+    """
+    return intelligent_dataframe_analyzer(question, dataframe)
+
+def handle_comparison_questions(intent, df):
+    """Handle comparison type questions"""
+    if len(intent['years']) >= 2:
+        year1, year2 = intent['years'][0], intent['years'][1]
+        year1_data = df[df['Year'] == year1]['TradeValue'].sum()
+        year2_data = df[df['Year'] == year2]['TradeValue'].sum()
+        
+        if year1_data == 0 or year2_data == 0:
+            return f"Insufficient data for comparison between {year1} and {year2}."
+        
+        change = year2_data - year1_data
+        change_pct = (change / year1_data) * 100
+        
+        explanation = f"**Crude Oil Trade Comparison:**\n"
+        explanation += f"• {year1}: ${year1_data/1e12:.3f} trillion USD\n"
+        explanation += f"• {year2}: ${year2_data/1e12:.3f} trillion USD\n"
+        explanation += f"• Change: ${change/1e12:.3f} trillion USD ({change_pct:+.1f}%)\n"
+        
+        if change_pct > 0:
+            explanation += f"\nTrade increased by {abs(change_pct):.1f}% from {year1} to {year2}."
+        else:
+            explanation += f"\nTrade decreased by {abs(change_pct):.1f}% from {year1} to {year2}."
+        
+        return explanation
+    
+    return "I need at least two years to make a comparison. Please specify the years you want to compare."
+
+def handle_temporal_questions(intent, df):
+    """
+    Handle trend and temporal analysis questions with enhanced year range logic:
+    - If question mentions "total" or "overall", calculate sum across all years in range
+    - If question implies change/comparison ("increase", "difference"), compare first and last year only
+    """
+    if not intent['years'] or len(intent['years']) < 2:
+        return "Please specify a year range for temporal analysis (e.g., 'between 2000 and 2010')."
+    
+    start_year, end_year = min(intent['years']), max(intent['years'])
+    period_data = df[(df['Year'] >= start_year) & (df['Year'] <= end_year)]
+    
+    if period_data.empty:
+        return f"No data available for the period {start_year}-{end_year}."
+    
+    # Determine if user wants total sum or year-to-year comparison
+    question_lower = str(intent.get('original_question', '')).lower()
+    is_total_request = any(word in question_lower for word in ['total', 'overall', 'sum', 'combined'])
+    is_comparison_request = any(word in question_lower for word in ['increase', 'decrease', 'change', 'difference', 'growth'])
+    
+    if is_total_request and not is_comparison_request:
+        # Calculate total sum across all years in range
+        total_value = period_data['TradeValue'].sum()
+        return f"**Total crude oil trade ({start_year}-{end_year}):** {format_human_readable(total_value)}."
+    
+    else:
+        # Compare first and last year only
+        yearly_totals = period_data.groupby('Year')['TradeValue'].sum().sort_index()
+        
+        first_value = yearly_totals.loc[start_year] if start_year in yearly_totals.index else 0
+        last_value = yearly_totals.loc[end_year] if end_year in yearly_totals.index else 0
+        
+        if first_value == 0 or last_value == 0:
+            return f"Insufficient data to compare {start_year} and {end_year}."
+        
+        change = last_value - first_value
+        change_pct = (change / first_value) * 100
+        
+        direction = "increased" if change > 0 else "decreased"
+        return f"**Trade {direction} from {start_year} to {end_year}:** {format_human_readable(abs(change))} ({abs(change_pct):.1f}%)."
+
+def extract_countries_from_query(query_lower, dataframe):
+    """
+    Extract country names from the query by matching against actual countries in the dataset.
+    Prioritizes exact matches when there are similar country names (e.g., Niger vs Nigeria).
+    Also handles regional queries like "East Africa", "West Africa", etc.
+    """
+    countries_in_data = dataframe['Country'].unique()
+    found_countries = []
+    exact_matches = []
+    partial_matches = []
+    
+    # Check for regional queries first
+    for region, countries in region_map.items():
+        if region in query_lower:
+            # Find countries from this region that exist in our dataset
+            regional_countries = [country for country in countries if country in countries_in_data]
+            if regional_countries:
+                return regional_countries
+    
+    # If no regional match, proceed with individual country matching
+    for country in countries_in_data:
+        country_lower = country.lower()
+        
+        # Check for exact word match first (e.g., "niger" matches exactly, not as part of "nigeria")
+        import re
+        if re.search(rf'\b{re.escape(country_lower)}\b', query_lower):
+            exact_matches.append(country)
+        # Check for partial match (country name appears in query)
+        elif country_lower in query_lower:
+            partial_matches.append(country)
+    
+    # Prioritize exact matches over partial matches
+    if exact_matches:
+        found_countries = exact_matches
+    elif partial_matches:
+        found_countries = partial_matches
+    
+    return found_countries
+
+def create_data_summary(dataframe):
+    """
+    Create a comprehensive but concise summary of the dataframe for AI analysis
+    """
+    try:
+        # Basic stats
+        total_records = len(dataframe)
+        date_range = f"{dataframe['Year'].min()}-{dataframe['Year'].max()}"
+        countries = dataframe['Country'].nunique()
+        total_trade_value = dataframe['TradeValue'].sum()
+        
+        # Top exporters and importers
+        top_exporters = dataframe[dataframe['Action'] == 'Export'].groupby('Country')['TradeValue'].sum().sort_values(ascending=False).head(5)
+        top_importers = dataframe[dataframe['Action'] == 'Import'].groupby('Country')['TradeValue'].sum().sort_values(ascending=False).head(5)
+        
+        # Yearly totals (sample years for context)
+        yearly_sample = dataframe.groupby('Year')['TradeValue'].sum().head(10)  # First 10 years
+        
+        # Country-specific examples
+        nigeria_exports = dataframe[(dataframe['Country'] == 'Nigeria') & (dataframe['Action'] == 'Export')]
+        nigeria_by_year = nigeria_exports.groupby('Year')['TradeValue'].sum().head(5)
+        
+        summary = f"""
+CRUDE OIL TRADE DATA SUMMARY ({date_range})
+==========================================
+Total Records: {total_records:,}
+Countries: {countries}
+Total Trade Value: {format_human_readable(total_trade_value)}
+
+TOP 5 EXPORTERS (Total 1995-2021):
+"""
+        for i, (country, value) in enumerate(top_exporters.items(), 1):
+            summary += f"{i}. {country}: {format_human_readable(value)}\n"
+        
+        summary += "\nTOP 5 IMPORTERS (Total 1995-2021):\n"
+        for i, (country, value) in enumerate(top_importers.items(), 1):
+            summary += f"{i}. {country}: {format_human_readable(value)}\n"
+        
+        summary += f"\nSAMPLE YEARLY TOTALS:\n"
+        for year, value in yearly_sample.items():
+            summary += f"{year}: {format_human_readable(value)}\n"
+        
+        if not nigeria_by_year.empty:
+            summary += f"\nNIGERIA EXPORTS (Sample Years):\n"
+            for year, value in nigeria_by_year.items():
+                summary += f"{year}: $" + f"{value/1e9:.2f}B USD\n"
+        
+        return summary
+        
+    except Exception as e:
+        return f"Data summary error: {str(e)}"
+        
+        # Create a comprehensive pandas analysis tool with full dataframe access
+        def analyze_full_dataframe(query: str) -> str:
+            """
+            Full pandas dataframe analyzer with complete access to all operations
+            """
+            try:
+                import re
+                import numpy as np
+                
+                # Make dataframe available for analysis
+                df = dataframe.copy()
+                
+                # Enhanced query processing with full pandas capabilities
+                query_lower = query.lower()
+                
+                # Country-specific analysis
+                if any(country in query_lower for country in ['nigeria', 'angola', 'algeria', 'egypt']):
+                    # Extract country name
+                    countries = ['nigeria', 'angola', 'algeria', 'egypt', 'gabon', 'cameroon']
+                    found_country = None
+                    for country in countries:
+                        if country in query_lower:
+                            found_country = country.title()
+                            break
+                    
+                    if found_country:
+                        country_data = df[df['Country'] == found_country]
+                        
+                        # Year-specific analysis
+                        years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', query)]
+                        if years:
+                            year = years[0]
+                            year_data = country_data[country_data['Year'] == year]
+                            
+                            if 'export' in query_lower:
+                                exports = year_data[year_data['Action'] == 'Export']
+                                if not exports.empty:
+                                    value = exports['TradeValue'].sum()
+                                    return f"**{found_country}** in {year}: {format_human_readable(value)} exports."
+                            elif 'import' in query_lower:
+                                imports = year_data[year_data['Action'] == 'Import']
+                                if not imports.empty:
+                                    value = imports['TradeValue'].sum()
+                                    return f"**{found_country}** in {year}: {format_human_readable(value)} imports."
+                            else:
+                                total_value = year_data['TradeValue'].sum()
+                                return f"**{found_country}** in {year}: {format_human_readable(total_value)} total trade."
+                        
+                        # Multi-year analysis for country with enhanced logic
+                        elif len(years) >= 2 or 'between' in query_lower:
+                            if len(years) >= 2:
+                                start_year, end_year = min(years), max(years)
+                            else:
+                                # Default range if no specific years mentioned
+                                start_year, end_year = 2000, 2010
+                                
+                            period_data = country_data[
+                                (country_data['Year'] >= start_year) & 
+                                (country_data['Year'] <= end_year)
+                            ]
+                            
+                            if period_data.empty:
+                                return f"No data for **{found_country}** between {start_year} and {end_year}."
+                            
+                            # Enhanced year range logic
+                            is_total_request = any(word in query_lower for word in ['total', 'overall', 'sum', 'combined'])
+                            is_comparison_request = any(word in query_lower for word in ['increase', 'decrease', 'change', 'difference', 'growth'])
+                            
+                            if is_total_request and not is_comparison_request:
+                                # Calculate total sum across all years in range
+                                if 'export' in query_lower:
+                                    exports = period_data[period_data['Action'] == 'Export']
+                                    total_value = exports['TradeValue'].sum()
+                                    return f"**{found_country}** total exports ({start_year}-{end_year}): {format_human_readable(total_value)}."
+                                elif 'import' in query_lower:
+                                    imports = period_data[period_data['Action'] == 'Import']
+                                    total_value = imports['TradeValue'].sum()
+                                    return f"**{found_country}** total imports ({start_year}-{end_year}): {format_human_readable(total_value)}."
+                                else:
+                                    total_value = period_data['TradeValue'].sum()
+                                    return f"**{found_country}** total trade ({start_year}-{end_year}): {format_human_readable(total_value)}."
+                            
+                            else:
+                                # Compare first and last year only
+                                start_data = country_data[country_data['Year'] == start_year]
+                                end_data = country_data[country_data['Year'] == end_year]
+                                
+                                if start_data.empty or end_data.empty:
+                                    return f"Insufficient data to compare **{found_country}** between {start_year} and {end_year}."
+                                
+                                if 'export' in query_lower:
+                                    start_val = start_data[start_data['Action'] == 'Export']['TradeValue'].sum()
+                                    end_val = end_data[end_data['Action'] == 'Export']['TradeValue'].sum()
+                                    action_text = "exports"
+                                elif 'import' in query_lower:
+                                    start_val = start_data[start_data['Action'] == 'Import']['TradeValue'].sum()
+                                    end_val = end_data[end_data['Action'] == 'Import']['TradeValue'].sum()
+                                    action_text = "imports"
+                                else:
+                                    start_val = start_data['TradeValue'].sum()
+                                    end_val = end_data['TradeValue'].sum()
+                                    action_text = "trade"
+                                
+                                if start_val == 0:
+                                    return f"No {action_text} data for **{found_country}** in {start_year}."
+                                
+                                change = end_val - start_val
+                                change_pct = (change / start_val) * 100
+                                direction = "increased" if change > 0 else "decreased"
+                                
+                                return f"**{found_country}** {action_text} {direction} from {start_year} to {end_year}: {format_human_readable(abs(change))} ({abs(change_pct):.1f}%)."
+                        
+                        # Overall country statistics
+                        else:
+                            exports = country_data[country_data['Action'] == 'Export']['TradeValue'].sum()
+                            imports = country_data[country_data['Action'] == 'Import']['TradeValue'].sum()
+                            years_active = sorted(country_data['Year'].unique())
+                            return f"{found_country} (1995-2021): Exports $" + f"{exports/1e9:.2f}B, Imports $" + f"{imports/1e9:.2f}B, Active years: {len(years_active)}"
+                
+                # Global trade analysis
+                elif 'total trade' in query_lower or 'global' in query_lower:
+                    years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', query)]
+                    if len(years) >= 2:
+                        start_year, end_year = min(years), max(years)
+                        period_data = df[(df['Year'] >= start_year) & (df['Year'] <= end_year)]
+                        total_value = period_data['TradeValue'].sum()
+                        return f"Global crude oil trade ({start_year}-{end_year}): $" + f"{total_value/1e12:.3f}T USD"
+                    elif len(years) == 1:
+                        year = years[0]
+                        year_data = df[df['Year'] == year]
+                        total_value = year_data['TradeValue'].sum()
+                        return f"Global crude oil trade in {year}: $" + f"{total_value/1e12:.3f}T USD"
+                
+                # Top countries analysis
+                elif 'top' in query_lower or 'largest' in query_lower or 'biggest' in query_lower:
+                    if 'export' in query_lower:
+                        exports_by_country = df[df['Action'] == 'Export'].groupby('Country')['TradeValue'].sum().sort_values(ascending=False)
+                        top_5 = exports_by_country.head(5)
+                        result = "Top 5 crude oil exporters:\n"
+                        for i, (country, value) in enumerate(top_5.items(), 1):
+                            result += f"{i}. {country}: $" + f"{value/1e9:.1f}B USD\n"
+                        return result.strip()
+                    elif 'import' in query_lower:
+                        imports_by_country = df[df['Action'] == 'Import'].groupby('Country')['TradeValue'].sum().sort_values(ascending=False)
+                        top_5 = imports_by_country.head(5)
+                        result = "Top 5 crude oil importers:\n"
+                        for i, (country, value) in enumerate(top_5.items(), 1):
+                            result += f"{i}. {country}: $" + f"{value/1e9:.1f}B USD\n"
+                        return result.strip()
+                
+                # Year comparison
+                elif 'compare' in query_lower:
+                    years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', query)]
+                    if len(years) >= 2:
+                        year1, year2 = years[0], years[1]
+                        year1_total = df[df['Year'] == year1]['TradeValue'].sum()
+                        year2_total = df[df['Year'] == year2]['TradeValue'].sum()
+                        change_pct = ((year2_total - year1_total) / year1_total) * 100
+                        return f"Trade comparison: {year1}: $" + f"{year1_total/1e12:.3f}T, {year2}: $" + f"{year2_total/1e12:.3f}T (Change: {change_pct:+.1f}%)"
+                
+                # Trend analysis
+                elif 'trend' in query_lower or 'growth' in query_lower:
+                    yearly_totals = df.groupby('Year')['TradeValue'].sum()
+                    first_year_value = yearly_totals.iloc[0]
+                    last_year_value = yearly_totals.iloc[-1]
+                    total_growth = ((last_year_value - first_year_value) / first_year_value) * 100
+                    return f"Crude oil trade trend (1995-2021): Started at $" + f"{first_year_value/1e12:.3f}T, ended at $" + f"{last_year_value/1e12:.3f}T (Total growth: {total_growth:+.1f}%)"
+                
+                # Default comprehensive summary
+                else:
+                    total_records = len(df)
+                    total_value = df['TradeValue'].sum()
+                    unique_countries = df['Country'].nunique()
+                    year_range = f"{df['Year'].min()}-{df['Year'].max()}"
+                    return f"Crude Oil Trade Database: {total_records:,} records, {unique_countries} countries, {year_range}, Total value: $" + f"{total_value/1e12:.3f}T USD"
+                
+            except Exception as e:
+                return f"Analysis error: {str(e)}"
+        
+        # Create the pandas analysis tool
+        pandas_tool = Tool(
+            name="CrudeOilDataAnalyzer", 
+            description="Comprehensive crude oil trade data analyzer with full pandas dataframe access. Can analyze any aspect of the data including country-specific trades, yearly comparisons, trends, and global statistics.",
+            func=analyze_full_dataframe
+        )
+        
+        # Use the tool directly for now (simpler than full agent setup)
+        result = analyze_full_dataframe(question)
+        return result
+        
+    except Exception as e:
+        return f"LangChain analysis failed: {str(e)}"
 
 def get_basic_response(question, dataframe):
     """
