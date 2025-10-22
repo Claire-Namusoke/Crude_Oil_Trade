@@ -1690,10 +1690,22 @@ def main():
         
         # Debug: Show countries without ISO mapping
         missing_iso = country_totals[country_totals['iso_alpha'].isna()]
-        if not missing_iso.empty and selected_continent == 'Africa':
-            with st.expander("🔍 Debug: Countries Missing ISO Codes"):
-                st.write(f"Found {len(missing_iso)} countries without ISO mapping:")
-                st.dataframe(missing_iso[['Country', 'TradeValue']].sort_values('TradeValue', ascending=False))
+        if not missing_iso.empty:
+            # Attempt to auto-map common variants and missing countries
+            auto_iso = {
+                "Ivory Coast": "CIV", "Cote d'Ivoire": "CIV", "Cabo Verde": "CPV", "Swaziland": "SWZ",
+                "Micronesia": "FSM", "East Timor": "TLS", "Saint Lucia": "LCA", "Saint Vincent and the Grenadines": "VCT",
+                "Saint Kitts and Nevis": "KNA", "Antigua and Barbuda": "ATG", "Dominica": "DMA", "Grenada": "GRD",
+                "Saint Pierre and Miquelon": "SPM", "Montserrat": "MSR", "Bermuda": "BMU", "Greenland": "GRL",
+                "Aruba": "ABW", "Curacao": "CUW", "Sint Maarten": "SXM", "Bonaire": "BES", "Anguilla": "AIA",
+                "British Virgin Islands": "VGB", "Cayman Islands": "CYM", "Turks and Caicos Islands": "TCA",
+                "Falkland Islands": "FLK", "Gibraltar": "GIB", "Isle of Man": "IMN", "Jersey": "JEY", "Guernsey": "GGY"
+            }
+            for country in missing_iso['Country']:
+                if country in auto_iso:
+                    country_iso_mapping[country] = auto_iso[country]
+            # Re-map after auto-fix
+            country_totals['iso_alpha'] = country_totals['Country'].map(country_iso_mapping)
         
         # For continent-specific views, add all continent countries with base values to fill gaps
         if selected_continent != 'All':
