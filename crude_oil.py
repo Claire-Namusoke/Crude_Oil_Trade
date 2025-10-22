@@ -107,118 +107,179 @@ Be direct, precise, and intelligent in reasoning — think like a professional d
 """
 
 # ------------------------
-# Function to answer any user question
+# Data Analysis Functions - These do the actual DataFrame work
+# ------------------------
+def analyze_lowest_highest(df, metric_type, action_type=None):
+    """Find country with lowest/highest trade value"""
+    df_work = df.copy()
+    if action_type:
+        df_work = df_work[df_work['Action'] == action_type]
+    
+    if df_work.empty:
+        return None
+    
+    country_totals = df_work.groupby('Country')['TradeValue'].sum().sort_values()
+    
+    if metric_type == "lowest":
+        country = country_totals.index[0]
+        value = country_totals.iloc[0]
+    else:  # highest
+        country = country_totals.index[-1]
+        value = country_totals.iloc[-1]
+    
+    return {
+        "country": country,
+        "value": value,
+        "value_formatted": format_human_readable(value),
+        "action": action_type or "Trade",
+        "metric": metric_type
+    }
+
+def analyze_country_specific(df, country_name, years=None, action=None):
+    """Get specific country data"""
+    df_work = df[df['Country'].str.lower() == country_name.lower()].copy()
+    
+    if years:
+        df_work = df_work[df_work['Year'].isin(years)]
+    if action:
+        df_work = df_work[df_work['Action'] == action]
+    
+    if df_work.empty:
+        return None
+    
+    total = df_work['TradeValue'].sum()
+    return {
+        "country": country_name,
+        "total": total,
+        "total_formatted": format_human_readable(total),
+        "years": years,
+        "action": action
+    }
+
+def analyze_year_range(df, start_year, end_year):
+    """Analyze trends across year range"""
+    df_work = df[(df['Year'] >= start_year) & (df['Year'] <= end_year)].copy()
+    
+    if df_work.empty:
+        return None
+    
+    yearly_totals = df_work.groupby('Year')['TradeValue'].sum().sort_index()
+    start_val = yearly_totals.iloc[0]
+    end_val = yearly_totals.iloc[-1]
+    change = end_val - start_val
+    pct_change = (change / start_val * 100) if start_val != 0 else 0
+    
+    return {
+        "start_year": start_year,
+        "end_year": end_year,
+        "start_value": start_val,
+        "end_value": end_val,
+        "start_formatted": format_human_readable(start_val),
+        "end_formatted": format_human_readable(end_val),
+        "change": change,
+        "change_formatted": format_human_readable(abs(change)),
+        "pct_change": pct_change
+    }
+
+# ------------------------
+# Main Answer Function with Real Data Analysis
 # ------------------------
 def answer_question(user_question, df):
     """
-    This function interprets user questions about crude oil trade,
-    performs accurate calculations on the full DataFrame,
-    and uses AI to format the explanation and natural-language response.
+    Analyzes the actual DataFrame to get real results,
+    then uses AI to format a natural language response.
     """
     question_lower = user_question.lower()
     
-    # Initialize result dictionary
-    result = {}
-
-    # Detect year(s) in question
+    # Extract years from question
     years = [int(token) for token in user_question.split() if token.isdigit() and len(token) == 4]
     
-    # Detect continent keywords
+    # Extract continent filter
     continents = ["Africa", "Europe", "Asia", "North America", "South America", "Oceania"]
     continent = None
     for cont in continents:
         if cont.lower() in question_lower:
             continent = cont
-
-    # ------------------------
-    # Determine query type: lowest/highest/total/comparison
-    # ------------------------
-    df_filtered = df.copy()
     
+    # Apply filters
+    df_filtered = df.copy()
     if continent:
         df_filtered = df_filtered[df_filtered["Continent"] == continent]
     if years:
         df_filtered = df_filtered[df_filtered["Year"].isin(years)]
-
-    # Handle 'lowest imports'
-    if "lowest" in question_lower and "import" in question_lower:
-        imports_df = df_filtered[df_filtered['Action'] == 'Import']
-        if not imports_df.empty:
-            country_imports = imports_df.groupby('Country')['TradeValue'].sum()
-            min_country = country_imports.idxmin()
-            min_value = country_imports.min()
-            result = {
-                "Country": min_country,
-                "Value": format_human_readable(min_value),
-                "Type": "Lowest Imports"
-            }
     
-    # Handle 'highest exports'
-    elif "highest" in question_lower and "export" in question_lower:
-        exports_df = df_filtered[df_filtered['Action'] == 'Export']
-        if not exports_df.empty:
-            country_exports = exports_df.groupby('Country')['TradeValue'].sum()
-            max_country = country_exports.idxmax()
-            max_value = country_exports.max()
-            result = {
-                "Country": max_country,
-                "Value": format_human_readable(max_value),
-                "Type": "Highest Exports"
-            }
+    # Perform actual data analysis based on question type
+    analysis_result = None
     
-    # Handle 'total trade between years'
-    elif "total trade" in question_lower or "trade value" in question_lower:
-        total = df_filtered["TradeValue"].sum()
-        result = {
-            "Value": format_human_readable(total),
-            "Years": f"{min(years)}-{max(years)}" if years else "All available years",
-            "Type": "Total Trade"
-        }
+    # Lowest/Highest queries
+    if "lowest" in question_lower:
+        if "import" in question_lower:
+            analysis_result = analyze_lowest_highest(df_filtered, "lowest", "Import")
+        elif "export" in question_lower:
+            analysis_result = analyze_lowest_highest(df_filtered, "lowest", "Export")
+        else:
+            # Generic lowest trade
+            analysis_result = analyze_lowest_highest(df_filtered, "lowest")
     
-    # Handle generic comparisons or trends
-    elif "compare" in question_lower or "trend" in question_lower or "change" in question_lower:
-        if len(years) >= 2:
-            values = []
-            for y in years:
-                temp = df_filtered[df_filtered["Year"] == y]
-                total = temp["TradeValue"].sum()
-                values.append((y, total))
-            # calculate change
-            change = values[-1][1] - values[0][1]
-            pct_change = (change / values[0][1]) * 100 if values[0][1] != 0 else 0
-            result = {
-                "StartYear": values[0][0],
-                "EndYear": values[-1][0],
-                "StartValue": format_human_readable(values[0][1]),
-                "EndValue": format_human_readable(values[-1][1]),
-                "Change": format_human_readable(change),
-                "PercentChange": f"{pct_change:.1f}%",
-                "Type": "Trend/Comparison"
-            }
+    elif "highest" in question_lower:
+        if "import" in question_lower:
+            analysis_result = analyze_lowest_highest(df_filtered, "highest", "Import")
+        elif "export" in question_lower:
+            analysis_result = analyze_lowest_highest(df_filtered, "highest", "Export")
+        else:
+            # Generic highest trade
+            analysis_result = analyze_lowest_highest(df_filtered, "highest")
     
+    # Year range analysis
+    elif len(years) >= 2 and any(word in question_lower for word in ["between", "from", "compare", "trend", "change"]):
+        analysis_result = analyze_year_range(df_filtered, min(years), max(years))
+    
+    # Country-specific queries
+    elif any(country.lower() in question_lower for country in df['Country'].unique()):
+        # Find the country mentioned
+        for country in df['Country'].unique():
+            if country.lower() in question_lower:
+                action = "Export" if "export" in question_lower else "Import" if "import" in question_lower else None
+                analysis_result = analyze_country_specific(df_filtered, country, years, action)
+                break
+    
+    # Total/Summary queries
     else:
-        # Fallback: Provide dataset summary
-        total_trade = df_filtered["TradeValue"].sum()
+        total = df_filtered["TradeValue"].sum()
         countries = df_filtered["Country"].nunique()
-        result = {
-            "Type": "Summary",
-            "TotalTrade": format_human_readable(total_trade),
-            "CountriesCovered": countries
+        analysis_result = {
+            "type": "summary",
+            "total": total,
+            "total_formatted": format_human_readable(total),
+            "countries": countries,
+            "years": years if years else "all years"
         }
 
     # ------------------------
-    # Send result to AI for natural-language explanation
+    # Send REAL analysis result to AI for natural-language formatting
     # ------------------------
+    if analysis_result is None:
+        return "I couldn't find relevant data to answer that question. Please try rephrasing or ask about specific countries, years, or trade metrics."
+    
     if AI_ENABLED and client:
-        prompt = f"""
-        {system_prompt}
+        # Create a clear prompt with the actual data analysis
+        prompt = f"""You are a data analyst. Format this crude oil trade analysis result into a clear, concise answer.
 
-        User question: {user_question}
+User Question: {user_question}
 
-        Data result: {result}
+ACTUAL DATA ANALYSIS RESULT:
+{analysis_result}
 
-        Provide a clear, human-readable answer explaining the result.
-        """
+Instructions:
+- Answer directly and naturally
+- Use the exact numbers from the analysis result
+- Be specific (mention country names, values, years)
+- Keep it concise (1-2 sentences)
+- Don't add extra information not in the data
+- Don't use markdown formatting
+
+Example: "Russia had the highest exports with $523.4B in total trade value."
+"""
 
         try:
             response = client.chat.completions.create(
@@ -228,11 +289,18 @@ def answer_question(user_question, df):
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            return f"AI processing error: {str(e)}. Raw result: {result}"
+            # Fallback to formatted result if AI fails
+            return f"Analysis complete: {analysis_result}"
     else:
-        # Provide debugging information
-        debug_info = f"AI_ENABLED: {AI_ENABLED}, client: {client is not None}, OPENAI_AVAILABLE: {OPENAI_AVAILABLE}"
-        return f"AI not available ({debug_info}). Raw result: {result}"
+        # Format result without AI
+        if "country" in analysis_result:
+            country = analysis_result["country"]
+            value = analysis_result.get("value_formatted") or analysis_result.get("total_formatted", "")
+            action = analysis_result.get("action", "trade")
+            metric = analysis_result.get("metric", "")
+            return f"{country} has the {metric} {action} value with {value}"
+        else:
+            return f"Analysis result: {analysis_result}"
 
 
 # --- Page Configuration ---
