@@ -525,18 +525,53 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Database Connection Function ---
+# --- Data Loading Function ---
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_crude_oil_data():
-    """Fetch crude oil data from the database with caching using SQLAlchemy"""
-    # Try multiple server connection formats
-    servers_to_try = [
-        r'CLAIRE-NAMUSOKE\SQLEXPRESS',
-        r'localhost\SQLEXPRESS',
-        r'.\SQLEXPRESS',
-        r'(local)\SQLEXPRESS'
-    ]
+    """Load crude oil data from CSV (cloud-ready) or database (local fallback)"""
+    
+    # Try CSV file first (for cloud deployment and reliability)
+    csv_path = "crude_oil_data.csv"
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            st.success(f"✅ Loaded {len(df)} records from CSV file")
+            return df, None
+        except Exception as csv_error:
+            st.warning(f"CSV file exists but failed to load: {csv_error}")
+    
+    # Fallback to database connection for local development
     database = 'CrudeOilTrade'
+    working_connection_string = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER=CLAIRE-NAMUSOKE\\SQLEXPRESS;"
+        f"DATABASE={database};"
+        f"Trusted_Connection=yes;"
+        f"Encrypt=yes;"
+        f"TrustServerCertificate=yes;"
+        f"Connection Timeout=60;"
+        f"Login Timeout=60;"
+    )
+    
+    try:
+        import warnings
+        warnings.filterwarnings('ignore', message='.*pandas only supports SQLAlchemy.*')
+        
+        conn = pyodbc.connect(working_connection_string)
+        query = "SELECT * FROM CrudeOilData;"
+        df = pd.read_sql(query, conn)
+        conn.close()
+        
+        st.info(f"📊 Loaded {len(df)} records from database")
+        return df, None
+        
+    except Exception as direct_error:
+        servers_to_try = [
+            r'CLAIRE-NAMUSOKE\SQLEXPRESS',
+            r'localhost\SQLEXPRESS',
+            r'.\SQLEXPRESS',
+            r'(local)\SQLEXPRESS'
+        ]
     
     # Try different server formats
     for server in servers_to_try:
