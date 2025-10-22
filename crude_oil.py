@@ -1660,7 +1660,6 @@ def main():
             'Venezuela': 'VEN', 'Colombia': 'COL', 'Iran': 'IRN', 'Bulgaria': 'BGR',
             'Croatia': 'HRV', 'Lithuania': 'LTU', 'Slovenia': 'SVN', 'Luxembourg': 'LUX',
             'Latvia': 'LVA', 'Estonia': 'EST', 'Cyprus': 'CYP', 'Malta': 'MLT',
-            
             # Comprehensive African Countries
             'Nigeria': 'NGA', 'Egypt': 'EGY', 'South Africa': 'ZAF', 'Algeria': 'DZA',
             'Morocco': 'MAR', 'Angola': 'AGO', 'Libya': 'LBY', 'Ghana': 'GHA',
@@ -1676,9 +1675,14 @@ def main():
             'Mauritius': 'MUS', 'Eswatini': 'SWZ', 'Djibouti': 'DJI', 'Comoros': 'COM',
             'Cape Verde': 'CPV', 'Sao Tome and Principe': 'STP', 'Seychelles': 'SYC',
             'Zimbabwe': 'ZWE', 'Mozambique': 'MOZ', 'Ivory Coast': 'CIV', 'Cote d\'Ivoire': 'CIV',
-            
             # Additional countries that might appear in trade data
-            'Congo': 'COG', 'Democratic Republic of the Congo': 'COD', 'Sudan': 'SDN'
+            'Congo': 'COG', 'Democratic Republic of the Congo': 'COD', 'Sudan': 'SDN',
+            # --- AUTO-ADDED MISSING ISO CODES ---
+            'Papua New Guinea': 'PNG', 'Fiji': 'FJI', 'Solomon Islands': 'SLB', 'New Caledonia': 'NCL',
+            'French Polynesia': 'PYF', 'Vanuatu': 'VUT', 'Samoa': 'WSM', 'Kiribati': 'KIR',
+            'Federated States of Micronesia': 'FSM', 'Tonga': 'TON', 'Marshall Islands': 'MHL', 'Palau': 'PLW',
+            'Cook Islands': 'COK', 'Nauru': 'NRU', 'Tuvalu': 'TUV', 'Niue': 'NIU', 'American Samoa': 'ASM',
+            'Guam': 'GUM', 'Northern Mariana Islands': 'MNP', 'Tokelau': 'TKL', 'Wallis and Futuna': 'WLF'
         }
         
         # Add ISO codes to country data
