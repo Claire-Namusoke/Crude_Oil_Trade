@@ -9,6 +9,9 @@ SQLAlchemy>=2.0.0
 
 # AI Integration
 openai>=1.3.0
+langchain>=0.1.0
+langchain-openai>=0.1.0
+langchain-experimental>=0.0.50
 
 # Python Standard Libraries (usually included, but listed for clarity)
 # datetime, urllib.parse, os, re, subprocess are built-in

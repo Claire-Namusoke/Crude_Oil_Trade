@@ -11,14 +11,18 @@ import os
 import re
 import subprocess
 
-# OpenAI imports
+# AI imports
 try:
     import openai
     from openai import OpenAI
+    from langchain.agents import create_pandas_dataframe_agent
+    from langchain_openai import ChatOpenAI
+    LANGCHAIN_AVAILABLE = True
     OPENAI_AVAILABLE = True
 except ImportError:
+    LANGCHAIN_AVAILABLE = False
     OPENAI_AVAILABLE = False
-    st.warning("⚠️ OpenAI library not installed. AI features will use fallback analysis.")
+    st.warning("⚠️ AI libraries not installed. AI features will use fallback analysis.")
 
 # Set up OpenAI client if available
 if OPENAI_AVAILABLE:
@@ -1878,26 +1882,88 @@ def main():
 # --- AI Response Function ---
 def get_ai_response(question, dataframe):
     """
-    Generate AI response for natural language questions about the dataframe
+    Generate AI response using LangChain pandas agent (much more reliable!)
     """
-    # Use OpenAI if available and enabled
-    if AI_ENABLED and client:
+    # Use LangChain if available
+    if LANGCHAIN_AVAILABLE and AI_ENABLED and client:
         try:
-            return get_openai_response(question, dataframe)
+            return get_langchain_response(question, dataframe)
         except Exception as e:
-            st.warning(f"OpenAI failed ({str(e)}), using fallback analysis...")
-            # Fall through to rule-based analysis
+            st.warning(f"LangChain failed ({str(e)}), using OpenAI fallback...")
+            try:
+                return get_openai_response(question, dataframe)
+            except Exception as e2:
+                st.warning(f"OpenAI also failed ({str(e2)}), using basic analysis...")
+                return get_basic_response(question, dataframe)
     
-    # Use our improved data analysis as fallback
+    # Use basic pandas analysis as fallback
     try:
-        # Use the same data analysis that OpenAI would use, but without AI interpretation
-        analysis_results = perform_data_analysis(question, dataframe)
-        if analysis_results:
-            return f"**Analysis Results:**\n\n{analysis_results}"
-        else:
-            return analyze_question_simple(question, dataframe)
+        return get_basic_response(question, dataframe)
     except Exception as e:
-        return analyze_question_simple(question, dataframe)
+        return f"Sorry, I couldn't analyze that question: {str(e)}"
+
+def get_langchain_response(question, dataframe):
+    """
+    Use LangChain pandas dataframe agent - much more reliable than our manual approach!
+    """
+    # Create LangChain ChatOpenAI instance
+    llm = ChatOpenAI(
+        api_key=client.api_key,
+        model="gpt-3.5-turbo",
+        temperature=0.1
+    )
+    
+    # Create pandas dataframe agent
+    agent = create_pandas_dataframe_agent(
+        llm,
+        dataframe,
+        verbose=False,
+        return_intermediate_steps=False,
+        allow_dangerous_code=True  # Required for pandas operations
+    )
+    
+    # Enhanced prompt for better responses
+    enhanced_question = f"""
+    Answer this question about the crude oil trade data: {question}
+    
+    Guidelines:
+    - Be direct and specific
+    - Use clean formatting like $2.134T USD instead of long numbers
+    - If asking about specific countries/years, give the exact answer first
+    - Keep responses concise and focused on what was asked
+    - The data covers years 1995-2021 with Import/Export actions
+    """
+    
+    # Get response from agent
+    response = agent.invoke(enhanced_question)
+    
+    # Extract the answer from the response
+    if isinstance(response, dict) and 'output' in response:
+        return response['output']
+    else:
+        return str(response)
+
+def get_basic_response(question, dataframe):
+    """
+    Simple direct answer system - no more garbled text!
+    """
+    import re
+    question_lower = question.lower()
+    
+    # Extract years
+    years = [int(year) for year in re.findall(r'\b(?:19|20)\d{2}\b', question)]
+    
+    # Handle specific cases with direct answers
+    if 'nigeria' in question_lower and 'export' in question_lower and years:
+        year = years[0]
+        nigeria_exports = dataframe[(dataframe['Country'] == 'Nigeria') & 
+                                  (dataframe['Action'] == 'Export') & 
+                                  (dataframe['Year'] == year)]
+        if not nigeria_exports.empty:
+            value = nigeria_exports['TradeValue'].sum()
+            return f"Nigeria's exports in {year}: ${value/1e9:.2f}B USD"
+    
+    return "Please try rephrasing your question or check that the data exists for the requested year/country."
 
 def get_openai_response(question, dataframe):
     """
