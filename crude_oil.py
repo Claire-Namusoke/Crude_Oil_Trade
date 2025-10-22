@@ -235,13 +235,18 @@ def answer_question(user_question, df):
         analysis_result = analyze_year_range(df_filtered, min(years), max(years))
     
     # Country-specific queries
-    elif any(country.lower() in question_lower for country in df['Country'].unique()):
-        # Find the country mentioned
+    else:
+        # Use word boundaries to avoid partial matches (e.g., Niger vs Nigeria)
+        import re
+        found_country = None
         for country in df['Country'].unique():
-            if country.lower() in question_lower:
-                action = "Export" if "export" in question_lower else "Import" if "import" in question_lower else None
-                analysis_result = analyze_country_specific(df_filtered, country, years, action)
+            pattern = r'\b' + re.escape(country.lower()) + r'\b'
+            if re.search(pattern, question_lower):
+                found_country = country
                 break
+        if found_country:
+            action = "Export" if "export" in question_lower else "Import" if "import" in question_lower else None
+            analysis_result = analyze_country_specific(df_filtered, found_country, years, action)
     
     # Total/Summary queries
     else:
