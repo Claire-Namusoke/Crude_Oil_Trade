@@ -22,19 +22,15 @@ except ImportError:
 
 # Set up OpenAI client if available
 if OPENAI_AVAILABLE:
-    # Try Streamlit secrets first, then fall back to environment variable
+    # Read API key from Streamlit Cloud secrets
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
         client = OpenAI(api_key=api_key)
         AI_ENABLED = True
-    except:
-        api_key = os.getenv('OPENAI_API_KEY')
-        if api_key:
-            client = OpenAI(api_key=api_key)
-            AI_ENABLED = True
-        else:
-            client = None
-            AI_ENABLED = False
+    except Exception as e:
+        # If secrets not configured, disable AI
+        client = None
+        AI_ENABLED = False
 else:
     client = None
     AI_ENABLED = False
@@ -222,7 +218,9 @@ def answer_question(user_question, df):
         except Exception as e:
             return f"AI processing error: {str(e)}. Raw result: {result}"
     else:
-        return f"AI not available. Raw result: {result}"
+        # Provide debugging information
+        debug_info = f"AI_ENABLED: {AI_ENABLED}, client: {client is not None}, OPENAI_AVAILABLE: {OPENAI_AVAILABLE}"
+        return f"AI not available ({debug_info}). Raw result: {result}"
 
 
 # --- Page Configuration ---
@@ -996,6 +994,29 @@ def create_dark_theme_plot(fig):
 def main():
     # Header
     st.title("🌍 Global Crude Oil Trade Dashboard (1995-2021)")
+    
+    # Show AI status
+    if AI_ENABLED and client:
+        st.success("🤖 AI Assistant: Active")
+    else:
+        st.warning("⚠️ AI Assistant: Not Available - Please configure OPENAI_API_KEY in Streamlit Cloud secrets")
+        with st.expander("ℹ️ How to add OpenAI API Key to Streamlit Cloud"):
+            st.markdown("""
+            **To enable AI features on the deployed app:**
+            
+            1. Go to your Streamlit Cloud dashboard: https://share.streamlit.io/
+            2. Click on your app: **Crude Oil Trade Dashboard**
+            3. Click the **⚙️ Settings** button (three dots menu)
+            4. Go to **Secrets** section
+            5. Add the following:
+            ```toml
+            OPENAI_API_KEY = "your-openai-api-key-here"
+            ```
+            6. Click **Save**
+            7. The app will automatically restart with AI enabled!
+            
+            **Note:** Your local version works because you have the key in `.streamlit/secrets.toml`
+            """)
     
     # Check for data loading errors
     if error:

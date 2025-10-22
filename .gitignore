@@ -54,9 +54,6 @@ Thumbs.db
 *.log
 logs/
 
-# Streamlit secrets (keep local, don't commit to GitHub)
-.streamlit/secrets.toml
-
 # Test files (development only)
 test_*.py
 *_test.py
