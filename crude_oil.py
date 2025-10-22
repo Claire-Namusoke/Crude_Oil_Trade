@@ -1053,7 +1053,8 @@ def main():
     continents = ['All'] + sorted(df['Continent'].unique())
     selected_continent = st.sidebar.selectbox(
         "🌍 Select Continent:",
-        options=continents
+        options=continents,
+        index=0  # Default to "All"
     )
     
     # Color scheme selection for accessibility
@@ -2031,6 +2032,14 @@ def main():
                 st.markdown("### 💬 Answer:")
                 st.markdown(f"**Question:** {user_question}")
                 st.markdown(f"<div class='ai-response'>{ai_response}</div>", unsafe_allow_html=True)
+                
+                # Clear Session Button after answer
+                st.markdown("---")
+                col1, col2, col3 = st.columns([2, 1, 2])
+                with col2:
+                    if st.button("🗑️ Clear Session", key="clear_session", help="Clear question and start fresh"):
+                        st.session_state.clear_input = True
+                        st.rerun()
                 
                 # Set flag to clear input on next rerun
                 st.session_state.clear_input = True
