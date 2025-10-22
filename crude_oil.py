@@ -1898,44 +1898,67 @@ def get_ai_response(question, dataframe):
 
 def get_openai_response(question, dataframe):
     """
-    Generate AI response using OpenAI API with data context
+    Generate AI response using OpenAI API with actual data analysis
     """
-    # Get data summary for context
+    question_lower = question.lower()
+    
+    # Analyze the question to extract relevant data
+    relevant_data = ""
+    
+    # Extract years if mentioned in question
+    years_mentioned = []
+    import re
+    year_matches = re.findall(r'\b(19|20)\d{2}\b', question)
+    if year_matches:
+        years_mentioned = [int(match[0] + match[1:]) for match in year_matches]
+        filtered_df = dataframe[dataframe['Year'].isin(years_mentioned)]
+        if not filtered_df.empty:
+            total_value = filtered_df['TradeValue'].sum()
+            relevant_data += f"\n• Trade value for years {years_mentioned}: ${total_value/1e12:.2f}T USD"
+            relevant_data += f"\n• Records for these years: {len(filtered_df):,}"
+            
+            # Top countries for these years
+            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(5)
+            relevant_data += f"\n• Top countries: {', '.join([f'{country} (${value/1e9:.1f}B)' for country, value in top_countries.items()])}"
+    
+    # Check for specific countries mentioned
+    country_keywords = ['china', 'usa', 'russia', 'saudi', 'india', 'japan', 'germany', 'uk', 'france']
+    for keyword in country_keywords:
+        if keyword in question_lower:
+            country_data = dataframe[dataframe['Country'].str.contains(keyword, case=False, na=False)]
+            if not country_data.empty:
+                country_total = country_data['TradeValue'].sum()
+                relevant_data += f"\n• {keyword.title()} total trade: ${country_total/1e12:.3f}T USD ({len(country_data):,} records)"
+    
+    # General dataset context
     total_records = len(dataframe)
-    countries = list(dataframe['Country'].unique())[:20]  # Limit for token efficiency
     years = sorted(dataframe['Year'].unique())
-    continents = list(dataframe['Continent'].unique())
     total_trade = dataframe['TradeValue'].sum()
     
-    # Create context prompt
-    context = f"""You are an expert data analyst specializing in crude oil trade data. 
-    
-Dataset Context:
-- Total Records: {total_records:,}
-- Years Covered: {years[0]}-{years[-1]}
-- Countries (sample): {', '.join(countries)}
-- Continents: {', '.join(continents)}
-- Total Trade Value: ${total_trade/1e12:.2f}T USD
-- Actions: Import, Export
+    context = f"""You are an expert data analyst. Answer the specific question using this crude oil trade data:
 
-Format numbers with T, B, M, K suffixes but keep years as regular numbers.
-Provide specific insights with actual data values when possible.
-Be concise but informative."""
+RELEVANT DATA FOR THIS QUESTION:{relevant_data}
+
+DATASET OVERVIEW:
+- Total Records: {total_records:,}
+- Years: {years[0]}-{years[-1]}
+- Total Trade Value: ${total_trade/1e12:.2f}T USD
+
+Answer the specific question with the actual data provided above. Be precise and use the exact numbers shown."""
 
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": context},
-                {"role": "user", "content": f"Analyze this crude oil trade question: {question}"}
+                {"role": "user", "content": question}
             ],
             max_tokens=500,
-            temperature=0.3
+            temperature=0.1
         )
         
         if response and response.choices:
-            ai_answer = response.choices[0].message.content.strip()
-            return ai_answer
+            return response.choices[0].message.content.strip()
         else:
             raise Exception("Empty response from OpenAI")
             
