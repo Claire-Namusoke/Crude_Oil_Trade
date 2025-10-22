@@ -1990,25 +1990,29 @@ def perform_data_analysis(question, df):
                 top_value = top_countries.iloc[0]
                 results.insert(0, f"Answer: {top_country} had the highest {action_mentioned.lower()} in {years_in_question[0] if len(years_in_question) == 1 else f'{years_in_question[0]}-{years_in_question[-1]}'} with ${top_value/1e9:.2f}B USD")
     
-    # If years are mentioned but no specific action
+    # If years are mentioned but no specific action - give DIRECT answer
     elif years_in_question:
         filtered_df = df[df['Year'].isin(years_in_question)]
         if not filtered_df.empty:
             total_value = filtered_df['TradeValue'].sum()
-            results.append(f"Total trade value for years {years_in_question}: ${total_value/1e12:.3f}T USD")
-            results.append(f"Number of trade records: {len(filtered_df):,}")
             
-            # Top countries by trade value
-            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(10)
-            results.append("Top 10 countries by trade value:")
-            for i, (country, value) in enumerate(top_countries.items(), 1):
-                results.append(f"  {i}. {country}: ${value/1e9:.2f}B USD")
+            # For simple "trade value between X and Y" questions, give direct answer
+            if 'trade value' in question_lower and len(years_in_question) > 1:
+                results.append(f"The total trade value between {years_in_question[0]} and {years_in_question[-1]} was ${total_value/1e12:.3f}T USD")
             
-            # Trade by action (Import/Export)
-            by_action = filtered_df.groupby('Action')['TradeValue'].sum()
-            results.append(f"Trade by action:")
-            for action, value in by_action.items():
-                results.append(f"  {action}: ${value/1e12:.3f}T USD")
+            # For single year questions  
+            elif len(years_in_question) == 1:
+                results.append(f"Total trade value for {years_in_question[0]}: ${total_value/1e12:.3f}T USD")
+                
+            # Only add details if specifically asked for breakdown/analysis
+            if any(word in question_lower for word in ['breakdown', 'analysis', 'details', 'countries', 'top']):
+                results.append(f"Number of trade records: {len(filtered_df):,}")
+                
+                # Top countries by trade value
+                top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(5)
+                results.append("Top 5 countries by trade value:")
+                for i, (country, value) in enumerate(top_countries.items(), 1):
+                    results.append(f"  {i}. {country}: ${value/1e9:.2f}B USD")
     
     # Check for country-specific questions
     countries_mentioned = []
