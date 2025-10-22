@@ -2006,6 +2006,15 @@ def main():
     # AI Assistant Section
     st.subheader("🤖 AI Assistant - Ask Questions About the Data")
     
+    # Initialize session state for clearing input
+    if 'clear_input' not in st.session_state:
+        st.session_state.clear_input = False
+    
+    # Clear the input if flag is set
+    if st.session_state.clear_input:
+        st.session_state.ai_input = ""
+        st.session_state.clear_input = False
+    
     # AI question input
     user_question = st.text_input(
         "Ask me anything about the crude oil trade data:",
@@ -2023,23 +2032,8 @@ def main():
                 st.markdown(f"**Question:** {user_question}")
                 st.markdown(f"<div class='ai-response'>{ai_response}</div>", unsafe_allow_html=True)
                 
-                # Clear History Button after answer
-                st.markdown("---")  # Add a separator line
-                col1, col2, col3 = st.columns([2, 1, 2])
-                with col2:
-                    if st.button("🗑️ Clear Session", key="clear_session", help="Clear current session data"):
-                        # Clear the AI input and any session data
-                        if 'ai_input' in st.session_state:
-                            del st.session_state.ai_input
-                        # Clear any other session data that might accumulate
-                        for key in list(st.session_state.keys()):
-                            if key.startswith('ai_') or key in ['clear_session']:
-                                del st.session_state[key]
-                        st.rerun()
-                
-                # Clear the input field after answering
-                if 'ai_input' in st.session_state:
-                    del st.session_state.ai_input
+                # Set flag to clear input on next rerun
+                st.session_state.clear_input = True
                 
             except Exception as e:
                 st.error(f"❌ AI Error: {str(e)}")
