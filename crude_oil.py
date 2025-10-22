@@ -535,7 +535,6 @@ def get_crude_oil_data():
     if os.path.exists(csv_path):
         try:
             df = pd.read_csv(csv_path)
-            st.success(f"✅ Loaded {len(df)} records from CSV file")
             return df, None
         except Exception as csv_error:
             st.warning(f"CSV file exists but failed to load: {csv_error}")
@@ -562,7 +561,6 @@ def get_crude_oil_data():
         df = pd.read_sql(query, conn)
         conn.close()
         
-        st.info(f"📊 Loaded {len(df)} records from database")
         return df, None
         
     except Exception as direct_error:
