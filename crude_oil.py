@@ -1890,9 +1890,14 @@ def get_ai_response(question, dataframe):
             st.warning(f"OpenAI failed ({str(e)}), using fallback analysis...")
             # Fall through to rule-based analysis
     
-    # Use rule-based analysis as fallback
+    # Use our improved data analysis as fallback
     try:
-        return analyze_question_advanced(question, dataframe)
+        # Use the same data analysis that OpenAI would use, but without AI interpretation
+        analysis_results = perform_data_analysis(question, dataframe)
+        if analysis_results:
+            return f"**Analysis Results:**\n\n{analysis_results}"
+        else:
+            return analyze_question_simple(question, dataframe)
     except Exception as e:
         return analyze_question_simple(question, dataframe)
 
@@ -1949,7 +1954,7 @@ def perform_data_analysis(question, df):
     results = []
     
     # Extract years from question
-    year_pattern = r'\b(19|20)\d{2}\b'
+    year_pattern = r'\b(?:19|20)\d{2}\b'
     years_in_question = [int(year) for year in re.findall(year_pattern, question)]
     
     # Extract year ranges (e.g., "between 2000 and 2002")
@@ -1959,25 +1964,51 @@ def perform_data_analysis(question, df):
         start_year, end_year = int(range_match.group(1)), int(range_match.group(2))
         years_in_question = list(range(start_year, end_year + 1))
     
-    # If years are mentioned, analyze those specific years
-    if years_in_question:
+    # Extract action from question (export/import)
+    action_mentioned = None
+    if 'export' in question_lower:
+        action_mentioned = 'Export'
+    elif 'import' in question_lower:
+        action_mentioned = 'Import'
+    
+    # Handle specific action + year questions (e.g., "highest export in 2004")
+    if years_in_question and action_mentioned:
+        filtered_df = df[(df['Year'].isin(years_in_question)) & (df['Action'] == action_mentioned)]
+        if not filtered_df.empty:
+            total_value = filtered_df['TradeValue'].sum()
+            results.append(f"Total {action_mentioned.lower()} value for {years_in_question}: ${total_value/1e12:.3f}T USD")
+            
+            # Top countries for this specific action and year(s)
+            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(10)
+            results.append(f"Top 10 countries by {action_mentioned.lower()} value:")
+            for i, (country, value) in enumerate(top_countries.items(), 1):
+                results.append(f"  {i}. {country}: ${value/1e9:.2f}B USD")
+                
+            # Specific answer for "which country" questions
+            if any(word in question_lower for word in ['which country', 'what country', 'who', 'highest']):
+                top_country = top_countries.index[0]
+                top_value = top_countries.iloc[0]
+                results.insert(0, f"Answer: {top_country} had the highest {action_mentioned.lower()} in {years_in_question[0] if len(years_in_question) == 1 else f'{years_in_question[0]}-{years_in_question[-1]}'} with ${top_value/1e9:.2f}B USD")
+    
+    # If years are mentioned but no specific action
+    elif years_in_question:
         filtered_df = df[df['Year'].isin(years_in_question)]
         if not filtered_df.empty:
             total_value = filtered_df['TradeValue'].sum()
-            results.append(f"Total trade value for years {years_in_question}: ${total_value:,.0f} USD (${total_value/1e12:.3f}T)")
+            results.append(f"Total trade value for years {years_in_question}: ${total_value/1e12:.3f}T USD")
             results.append(f"Number of trade records: {len(filtered_df):,}")
             
             # Top countries by trade value
             top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(10)
             results.append("Top 10 countries by trade value:")
             for i, (country, value) in enumerate(top_countries.items(), 1):
-                results.append(f"  {i}. {country}: ${value:,.0f} USD (${value/1e9:.2f}B)")
+                results.append(f"  {i}. {country}: ${value/1e9:.2f}B USD")
             
             # Trade by action (Import/Export)
             by_action = filtered_df.groupby('Action')['TradeValue'].sum()
             results.append(f"Trade by action:")
             for action, value in by_action.items():
-                results.append(f"  {action}: ${value:,.0f} USD (${value/1e12:.3f}T)")
+                results.append(f"  {action}: ${value/1e12:.3f}T USD")
     
     # Check for country-specific questions
     countries_mentioned = []
@@ -1990,7 +2021,7 @@ def perform_data_analysis(question, df):
         for country in countries_mentioned:
             country_data = df[df['Country'] == country]
             total_trade = country_data['TradeValue'].sum()
-            results.append(f"{country} total trade value: ${total_trade:,.0f} USD (${total_trade/1e12:.3f}T)")
+            results.append(f"{country} total trade value: ${total_trade/1e12:.3f}T USD")
             
             # Year range for this country
             years = sorted(country_data['Year'].unique())
@@ -2003,19 +2034,19 @@ def perform_data_analysis(question, df):
             continent_data = df[df['Continent'].str.contains(continent, case=False, na=False)]
             if not continent_data.empty:
                 total_trade = continent_data['TradeValue'].sum()
-                results.append(f"{continent.title()} total trade: ${total_trade:,.0f} USD (${total_trade/1e12:.3f}T)")
+                results.append(f"{continent.title()} total trade: ${total_trade/1e12:.3f}T USD")
     
     # Check for import/export specific questions
     if 'import' in question_lower or 'export' in question_lower:
         by_action = df.groupby('Action')['TradeValue'].sum()
         results.append("Trade breakdown by action:")
         for action, value in by_action.items():
-            results.append(f"  {action}: ${value:,.0f} USD (${value/1e12:.3f}T)")
+            results.append(f"  {action}: ${value/1e12:.3f}T USD")
     
     # If no specific analysis was triggered, provide general insights
     if not results:
         total_trade = df['TradeValue'].sum()
-        results.append(f"Total dataset trade value: ${total_trade:,.0f} USD (${total_trade/1e12:.2f}T)")
+        results.append(f"Total dataset trade value: ${total_trade/1e12:.2f}T USD")
         results.append(f"Data covers {df['Year'].min()}-{df['Year'].max()} ({len(df):,} records)")
         
         # Top countries overall
