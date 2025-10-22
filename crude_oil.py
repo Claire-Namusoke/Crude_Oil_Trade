@@ -1688,12 +1688,7 @@ def main():
         # Add ISO codes to country data
         country_totals['iso_alpha'] = country_totals['Country'].map(country_iso_mapping)
         
-        # Debug: Show countries without ISO mapping
-        missing_iso = country_totals[country_totals['iso_alpha'].isna()]
-        if not missing_iso.empty and selected_continent == 'Africa':
-            with st.expander("🔍 Debug: Countries Missing ISO Codes"):
-                st.write(f"Found {len(missing_iso)} countries without ISO mapping:")
-                st.dataframe(missing_iso[['Country', 'TradeValue']].sort_values('TradeValue', ascending=False))
+        # ...existing code...
         
         # For continent-specific views, add all continent countries with base values to fill gaps
         if selected_continent != 'All':
