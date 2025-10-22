@@ -529,46 +529,59 @@ st.markdown("""
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_crude_oil_data():
     """Fetch crude oil data from the database with caching using SQLAlchemy"""
-    server = r'CLAIRE-NAMUSOKE\SQLEXPRESS'
+    # Try multiple server connection formats
+    servers_to_try = [
+        r'CLAIRE-NAMUSOKE\SQLEXPRESS',
+        r'localhost\SQLEXPRESS',
+        r'.\SQLEXPRESS',
+        r'(local)\SQLEXPRESS'
+    ]
     database = 'CrudeOilTrade'
     
-    # Create SQLAlchemy connection string with proper URL encoding
-    # Use the correct format for Windows Authentication
-    params = urllib.parse.quote_plus(
-        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        f"Trusted_Connection=yes;"
-        f"Encrypt=yes;"
-        f"TrustServerCertificate=yes;"
-    )
-    connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
+    # Try different server formats
+    for server in servers_to_try:
+        try:
+            # Create SQLAlchemy connection string with proper URL encoding
+            params = urllib.parse.quote_plus(
+                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                f"SERVER={server};"
+                f"DATABASE={database};"
+                f"Trusted_Connection=yes;"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
+            )
+            connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
+            
+            # Create SQLAlchemy engine with additional timeout settings
+            engine = create_engine(
+                connection_string,
+                pool_timeout=60,
+                pool_recycle=-1,
+                connect_args={
+                    "timeout": 60,
+                    "login_timeout": 60,
+                    "connection_timeout": 60
+                }
+            )
+            
+            # Test connection first with a simple query
+            test_query = "SELECT 1 as test"
+            pd.read_sql(test_query, engine)
+            
+            # Use the engine with pandas for actual data
+            query = "SELECT * FROM CrudeOilData;"
+            df = pd.read_sql(query, engine)
+            
+            # Dispose of the engine to free resources
+            engine.dispose()
+            
+            return df, None
+            
+        except Exception as e:
+            continue
     
-    try:
-        # Create SQLAlchemy engine with additional timeout settings
-        engine = create_engine(
-            connection_string,
-            pool_timeout=20,
-            pool_recycle=-1,
-            connect_args={
-                "timeout": 30
-            }
-        )
-        
-        # Test connection first with a simple query
-        test_query = "SELECT 1 as test"
-        pd.read_sql(test_query, engine)
-        
-        # Use the engine with pandas for actual data
-        query = "SELECT * FROM CrudeOilData;"
-        df = pd.read_sql(query, engine)
-        
-        # Dispose of the engine to free resources
-        engine.dispose()
-        
-        return df, None
-    except Exception as sqlalchemy_error:
-        # Try fallback to direct pyodbc connection (with warning suppression)
+    # If all SQLAlchemy attempts fail, try direct pyodbc
+    for server in servers_to_try:
         try:
             import warnings
             warnings.filterwarnings('ignore', message='.*SQLAlchemy.*')
@@ -581,7 +594,8 @@ def get_crude_oil_data():
                 f"Trusted_Connection=yes;"
                 f"Encrypt=yes;"
                 f"TrustServerCertificate=yes;"
-                f"Connection Timeout=30;"
+                f"Connection Timeout=60;"
+                f"Login Timeout=60;"
             )
             
             conn = pyodbc.connect(pyodbc_conn_string)
@@ -590,11 +604,13 @@ def get_crude_oil_data():
             conn.close()
             
             return df, None
-        except Exception as pyodbc_error:
-            # Enhanced error reporting
-            error_msg = f"All connection methods failed.\nSQLAlchemy error: {str(sqlalchemy_error)}\nPyODBC error: {str(pyodbc_error)}"
-            print(f"Error details: {error_msg}")
-            return pd.DataFrame(), error_msg
+            
+        except Exception as e:
+            continue
+    
+    # If all attempts fail
+    error_msg = f"❌ All connection attempts failed for all server formats: {', '.join(servers_to_try)}"
+    return pd.DataFrame(), error_msg
 
 # --- Load Data with Loading Indicator ---
 def load_data_with_spinner():
