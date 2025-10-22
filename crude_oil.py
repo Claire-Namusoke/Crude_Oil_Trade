@@ -1898,62 +1898,37 @@ def get_ai_response(question, dataframe):
 
 def get_openai_response(question, dataframe):
     """
-    Generate AI response using OpenAI API with actual data analysis
+    Generate AI response using OpenAI API with comprehensive data analysis
     """
+    import re
     question_lower = question.lower()
     
-    # Analyze the question to extract relevant data
-    relevant_data = ""
+    # Perform actual data analysis based on the question
+    analysis_results = perform_data_analysis(question, dataframe)
     
-    # Extract years if mentioned in question
-    years_mentioned = []
-    import re
-    year_matches = re.findall(r'\b(19|20)\d{2}\b', question)
-    if year_matches:
-        years_mentioned = [int(match[0] + match[1:]) for match in year_matches]
-        filtered_df = dataframe[dataframe['Year'].isin(years_mentioned)]
-        if not filtered_df.empty:
-            total_value = filtered_df['TradeValue'].sum()
-            relevant_data += f"\n• Trade value for years {years_mentioned}: ${total_value/1e12:.2f}T USD"
-            relevant_data += f"\n• Records for these years: {len(filtered_df):,}"
-            
-            # Top countries for these years
-            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(5)
-            relevant_data += f"\n• Top countries: {', '.join([f'{country} (${value/1e9:.1f}B)' for country, value in top_countries.items()])}"
-    
-    # Check for specific countries mentioned
-    country_keywords = ['china', 'usa', 'russia', 'saudi', 'india', 'japan', 'germany', 'uk', 'france']
-    for keyword in country_keywords:
-        if keyword in question_lower:
-            country_data = dataframe[dataframe['Country'].str.contains(keyword, case=False, na=False)]
-            if not country_data.empty:
-                country_total = country_data['TradeValue'].sum()
-                relevant_data += f"\n• {keyword.title()} total trade: ${country_total/1e12:.3f}T USD ({len(country_data):,} records)"
-    
-    # General dataset context
-    total_records = len(dataframe)
-    years = sorted(dataframe['Year'].unique())
-    total_trade = dataframe['TradeValue'].sum()
-    
-    context = f"""You are an expert data analyst. Answer the specific question using this crude oil trade data:
+    # Create comprehensive context with real data
+    context = f"""You are an expert crude oil trade analyst. Use ONLY the specific data analysis results provided below to answer the user's question. DO NOT provide generic responses.
 
-RELEVANT DATA FOR THIS QUESTION:{relevant_data}
+QUESTION: {question}
 
-DATASET OVERVIEW:
-- Total Records: {total_records:,}
-- Years: {years[0]}-{years[-1]}
-- Total Trade Value: ${total_trade/1e12:.2f}T USD
+DATA ANALYSIS RESULTS:
+{analysis_results}
 
-Answer the specific question with the actual data provided above. Be precise and use the exact numbers shown."""
+INSTRUCTIONS:
+1. Answer the specific question using ONLY the data provided above
+2. Use exact numbers and statistics from the analysis results
+3. Be precise and data-driven
+4. Format large numbers with appropriate suffixes (T for trillion, B for billion, M for million)
+5. Focus on insights relevant to the specific question asked"""
 
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": context},
-                {"role": "user", "content": question}
+                {"role": "user", "content": f"Based on the data analysis results provided, answer this question: {question}"}
             ],
-            max_tokens=500,
+            max_tokens=600,
             temperature=0.1
         )
         
@@ -1964,6 +1939,92 @@ Answer the specific question with the actual data provided above. Be precise and
             
     except Exception as e:
         raise Exception(f"OpenAI API error: {str(e)}")
+
+def perform_data_analysis(question, df):
+    """
+    Perform comprehensive data analysis based on the question content
+    """
+    import re
+    question_lower = question.lower()
+    results = []
+    
+    # Extract years from question
+    year_pattern = r'\b(19|20)\d{2}\b'
+    years_in_question = [int(year) for year in re.findall(year_pattern, question)]
+    
+    # Extract year ranges (e.g., "between 2000 and 2002")
+    range_pattern = r'between\s+(\d{4})\s+and\s+(\d{4})'
+    range_match = re.search(range_pattern, question_lower)
+    if range_match:
+        start_year, end_year = int(range_match.group(1)), int(range_match.group(2))
+        years_in_question = list(range(start_year, end_year + 1))
+    
+    # If years are mentioned, analyze those specific years
+    if years_in_question:
+        filtered_df = df[df['Year'].isin(years_in_question)]
+        if not filtered_df.empty:
+            total_value = filtered_df['TradeValue'].sum()
+            results.append(f"Total trade value for years {years_in_question}: ${total_value:,.0f} USD (${total_value/1e12:.3f}T)")
+            results.append(f"Number of trade records: {len(filtered_df):,}")
+            
+            # Top countries by trade value
+            top_countries = filtered_df.groupby('Country')['TradeValue'].sum().nlargest(10)
+            results.append("Top 10 countries by trade value:")
+            for i, (country, value) in enumerate(top_countries.items(), 1):
+                results.append(f"  {i}. {country}: ${value:,.0f} USD (${value/1e9:.2f}B)")
+            
+            # Trade by action (Import/Export)
+            by_action = filtered_df.groupby('Action')['TradeValue'].sum()
+            results.append(f"Trade by action:")
+            for action, value in by_action.items():
+                results.append(f"  {action}: ${value:,.0f} USD (${value/1e12:.3f}T)")
+    
+    # Check for country-specific questions
+    countries_mentioned = []
+    unique_countries = df['Country'].unique()
+    for country in unique_countries:
+        if country.lower() in question_lower:
+            countries_mentioned.append(country)
+    
+    if countries_mentioned:
+        for country in countries_mentioned:
+            country_data = df[df['Country'] == country]
+            total_trade = country_data['TradeValue'].sum()
+            results.append(f"{country} total trade value: ${total_trade:,.0f} USD (${total_trade/1e12:.3f}T)")
+            
+            # Year range for this country
+            years = sorted(country_data['Year'].unique())
+            results.append(f"{country} data available: {years[0]}-{years[-1]} ({len(country_data):,} records)")
+    
+    # Check for continent analysis
+    continents = ['africa', 'asia', 'europe', 'north america', 'south america', 'oceania']
+    for continent in continents:
+        if continent in question_lower:
+            continent_data = df[df['Continent'].str.contains(continent, case=False, na=False)]
+            if not continent_data.empty:
+                total_trade = continent_data['TradeValue'].sum()
+                results.append(f"{continent.title()} total trade: ${total_trade:,.0f} USD (${total_trade/1e12:.3f}T)")
+    
+    # Check for import/export specific questions
+    if 'import' in question_lower or 'export' in question_lower:
+        by_action = df.groupby('Action')['TradeValue'].sum()
+        results.append("Trade breakdown by action:")
+        for action, value in by_action.items():
+            results.append(f"  {action}: ${value:,.0f} USD (${value/1e12:.3f}T)")
+    
+    # If no specific analysis was triggered, provide general insights
+    if not results:
+        total_trade = df['TradeValue'].sum()
+        results.append(f"Total dataset trade value: ${total_trade:,.0f} USD (${total_trade/1e12:.2f}T)")
+        results.append(f"Data covers {df['Year'].min()}-{df['Year'].max()} ({len(df):,} records)")
+        
+        # Top countries overall
+        top_countries = df.groupby('Country')['TradeValue'].sum().nlargest(5)
+        results.append("Top 5 countries by total trade value:")
+        for i, (country, value) in enumerate(top_countries.items(), 1):
+            results.append(f"  {i}. {country}: ${value/1e12:.3f}T USD")
+    
+    return "\n".join(results)
 
 def analyze_question_advanced(question, df):
     """
