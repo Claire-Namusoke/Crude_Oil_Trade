@@ -1050,11 +1050,11 @@ def main():
     )
     
     # Continent selection
-    continents = ['All'] + sorted(df['Continent'].unique())
-    selected_continent = st.sidebar.selectbox(
-        "🌍 Select Continent:",
-        options=continents,
-        index=0  # Default to "All"
+    continent_options = ['All'] + sorted(df['Continent'].unique())
+    selected_continents = st.sidebar.multiselect(
+        "🌍 Select Continents:",
+        options=continent_options,
+        default=['All']
     )
     
     # Color scheme selection for accessibility
@@ -1070,8 +1070,12 @@ def main():
     if selected_years and 'All' not in selected_years:
         filtered_df = filtered_df[filtered_df['Year'].isin(selected_years)]
         
-    if selected_continent != 'All':
-        filtered_df = filtered_df[filtered_df['Continent'] == selected_continent]
+    if selected_continents and 'All' not in selected_continents:
+        filtered_df = filtered_df[filtered_df['Continent'].isin(selected_continents)]
+    
+    # For display purposes, determine if showing all continents
+    showing_all_continents = not selected_continents or 'All' in selected_continents
+    selected_continent = 'All' if showing_all_continents else selected_continents[0] if len(selected_continents) == 1 else 'Multiple'
     
     # Main Content Area
     if filtered_df.empty:
