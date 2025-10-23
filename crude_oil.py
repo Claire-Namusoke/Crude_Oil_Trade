@@ -29,6 +29,7 @@ if OPENAI_AVAILABLE:
             client = OpenAI(api_key=api_key)
             AI_ENABLED = True
         else:
+            pass
             client = None
             AI_ENABLED = False
             st.error("🔑 OpenAI API key is empty in Streamlit secrets")
@@ -247,18 +248,17 @@ def answer_question(user_question, df):
         if found_country:
             action = "Export" if "export" in question_lower else "Import" if "import" in question_lower else None
             analysis_result = analyze_country_specific(df_filtered, found_country, years, action)
-    
-    # Total/Summary queries
-    else:
-        total = df_filtered["TradeValue"].sum()
-        countries = df_filtered["Country"].nunique()
-        analysis_result = {
-            "type": "summary",
-            "total": total,
-            "total_formatted": format_human_readable(total),
-            "countries": countries,
-            "years": years if years else "all years"
-        }
+        else:
+            # Total/Summary queries
+            total = df_filtered["TradeValue"].sum()
+            countries = df_filtered["Country"].nunique()
+            analysis_result = {
+                "type": "summary",
+                "total": total,
+                "total_formatted": format_human_readable(total),
+                "countries": countries,
+                "years": years if years else "all years"
+            }
 
     # ------------------------
     # Send REAL analysis result to AI for natural-language formatting
