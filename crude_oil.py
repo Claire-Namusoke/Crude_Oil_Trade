@@ -26,7 +26,7 @@ if OPENAI_AVAILABLE:
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
         if api_key and len(api_key) > 0:
-            client = OpenAI(api_key=api_key)
+            client = OpenAI(api_key=api_key)  # type: ignore
             AI_ENABLED = True
         else:
             pass
@@ -292,7 +292,8 @@ Example: "Russia had the highest exports with $523.4B in total trade value."
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            return content.strip() if content else "Analysis complete."
         except Exception as e:
             # Fallback to formatted result if AI fails
             return f"Analysis complete: {analysis_result}"
@@ -828,7 +829,7 @@ def get_crude_oil_data():
         
         conn = pyodbc.connect(working_connection_string)
         query = "SELECT * FROM CrudeOilData;"
-        df = pd.read_sql(query, conn)
+        df = pd.read_sql(query, conn)  # type: ignore
         conn.close()
         
         return df, None
@@ -903,7 +904,7 @@ def get_crude_oil_data():
             
             conn = pyodbc.connect(pyodbc_conn_string)
             query = "SELECT * FROM CrudeOilData;"
-            df = pd.read_sql(query, conn)
+            df = pd.read_sql(query, conn)  # type: ignore
             conn.close()
             
             return df, None
@@ -1010,7 +1011,7 @@ def test_openai_connection():
     # Test 3: Test API connection with a simple request
     try:
         # Test with the new OpenAI client format
-        test_client = OpenAI(api_key=api_key)
+        test_client = OpenAI(api_key=api_key)  # type: ignore
         
         # Test with a very simple completion
         response = test_client.chat.completions.create(
@@ -1024,7 +1025,8 @@ def test_openai_connection():
         
         if response and response.choices:
             results.append("✅ OpenAI API Connection: SUCCESS")
-            results.append(f"🤖 Test Response: {response.choices[0].message.content.strip()}")
+            content = response.choices[0].message.content
+            results.append(f"🤖 Test Response: {content.strip() if content else 'OK'}")
             results.append(f"📊 Model Used: {response.model}")
         else:
             results.append("❌ OpenAI API Connection: FAILED - Empty response")
@@ -3130,7 +3132,7 @@ INSTRUCTIONS:
 5. Focus on insights relevant to the specific question asked"""
 
     try:
-        response = client.chat.completions.create(
+        response = client.chat.completions.create(  # type: ignore
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": context},
@@ -3372,8 +3374,8 @@ def handle_comparison_question(question, df, countries, continents):
             response += f"• **{continent}**: {format_currency(value)}\n"
         
         # Add insights
-        highest = max(comparison_data, key=comparison_data.get)
-        lowest = min(comparison_data, key=comparison_data.get)
+        highest = max(comparison_data, key=lambda k: comparison_data[k])
+        lowest = min(comparison_data, key=lambda k: comparison_data[k])
         response += f"\n**Insights:**\n"
         response += f"• {highest} leads with {format_currency(comparison_data[highest])}\n"
         response += f"• {lowest} has {format_currency(comparison_data[lowest])}\n"
