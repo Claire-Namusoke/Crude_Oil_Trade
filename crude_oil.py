@@ -276,6 +276,17 @@ def extract_continents_from_question(question):
     
     return found_continents
 
+def extract_region_from_question(question):
+    """Extract African region from question and return list of countries"""
+    question_lower = question.lower()
+    
+    # Check each region in the region_map
+    for region_name, countries in region_map.items():
+        if region_name in question_lower:
+            return countries
+    
+    return None
+
 def analyze_year_summary(df, year):
     """
     Provide comprehensive summary for a specific year
@@ -327,16 +338,27 @@ def answer_question(user_question, df):
     mentioned_countries = extract_countries_from_question(user_question, df)
     mentioned_continents = extract_continents_from_question(user_question)
     
+    # Check for regional queries (e.g., "East Africa", "West Africa")
+    region_countries = extract_region_from_question(user_question)
+    
     # Legacy continent filter (keep for backwards compatibility)
     continent = mentioned_continents[0] if mentioned_continents else None
     
     # Apply basic filters
     df_filtered = df.copy()
-    if continent and len(mentioned_continents) == 1:
+    
+    # If region is specified (e.g., "East Africa"), filter to those countries
+    if region_countries:
+        df_filtered = df_filtered[df_filtered["Country"].isin(region_countries)]
+    elif continent and len(mentioned_continents) == 1:
         df_filtered = df_filtered[df_filtered["Continent"] == continent]
-    if mentioned_countries and len(mentioned_countries) == 1 and not any(word in question_lower for word in ["compare", "vs", "versus"]):
-        # Filter to single country if mentioned (but not for country A vs country B comparisons)
+    
+    # Filter to single country UNLESS it's a country A vs country B comparison
+    is_country_vs_country = len(mentioned_countries) >= 2 and any(word in question_lower for word in ["compare", "vs", "versus"])
+    if mentioned_countries and len(mentioned_countries) == 1 and not is_country_vs_country:
+        # Filter to single country (for queries like "compare imports vs exports for Uganda")
         df_filtered = df_filtered[df_filtered["Country"] == mentioned_countries[0]]
+    
     if years and not any(word in question_lower for word in ["compare", "vs", "versus", "between"]):
         df_filtered = df_filtered[df_filtered["Year"].isin(years)]
     
