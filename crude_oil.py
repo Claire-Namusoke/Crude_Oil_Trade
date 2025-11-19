@@ -202,6 +202,114 @@ def analyze_year_range(df, start_year, end_year):
         "pct_change": pct_change
     }
 
+def compare_entities(df, entity1, entity2, entity_type="country"):
+    """
+    Compare two countries, continents, or years
+    entity_type: 'country', 'continent', or 'year'
+    """
+    if entity_type == "country":
+        data1 = df[df['Country'] == entity1]['TradeValue'].sum()
+        data2 = df[df['Country'] == entity2]['TradeValue'].sum()
+        label1, label2 = entity1, entity2
+    elif entity_type == "continent":
+        data1 = df[df['Continent'] == entity1]['TradeValue'].sum()
+        data2 = df[df['Continent'] == entity2]['TradeValue'].sum()
+        label1, label2 = entity1, entity2
+    elif entity_type == "year":
+        data1 = df[df['Year'] == entity1]['TradeValue'].sum()
+        data2 = df[df['Year'] == entity2]['TradeValue'].sum()
+        label1, label2 = str(entity1), str(entity2)
+    else:
+        return None
+    
+    difference = abs(data1 - data2)
+    higher = label1 if data1 > data2 else label2
+    lower = label2 if data1 > data2 else label1
+    higher_value = max(data1, data2)
+    lower_value = min(data1, data2)
+    
+    if lower_value > 0:
+        pct_diff = ((higher_value - lower_value) / lower_value) * 100
+    else:
+        pct_diff = 0
+    
+    return {
+        "type": f"{entity_type}_comparison",
+        "entity1": label1,
+        "entity2": label2,
+        "value1": data1,
+        "value2": data2,
+        "value1_formatted": format_human_readable(data1),
+        "value2_formatted": format_human_readable(data2),
+        "higher": higher,
+        "lower": lower,
+        "difference": difference,
+        "difference_formatted": format_human_readable(difference),
+        "pct_diff": pct_diff
+    }
+
+def extract_countries_from_question(question, df):
+    """Extract country names mentioned in the question"""
+    import re
+    question_lower = question.lower()
+    countries_in_data = df['Country'].unique()
+    found_countries = []
+    
+    for country in countries_in_data:
+        country_lower = country.lower()
+        # Use word boundaries to avoid partial matches
+        pattern = r'\b' + re.escape(country_lower) + r'\b'
+        if re.search(pattern, question_lower):
+            found_countries.append(country)
+    
+    return found_countries
+
+def extract_continents_from_question(question):
+    """Extract continent names mentioned in the question"""
+    question_lower = question.lower()
+    continents = ["Africa", "Europe", "Asia", "North America", "South America", "Oceania"]
+    found_continents = []
+    
+    for continent in continents:
+        if continent.lower() in question_lower:
+            found_continents.append(continent)
+    
+    return found_continents
+
+def analyze_year_summary(df, year):
+    """
+    Provide comprehensive summary for a specific year
+    Returns imports, exports, top importers, top exporters
+    """
+    year_data = df[df['Year'] == year].copy()
+    
+    if year_data.empty:
+        return None
+    
+    # Calculate totals
+    imports_total = year_data[year_data['Action'] == 'Import']['TradeValue'].sum()
+    exports_total = year_data[year_data['Action'] == 'Export']['TradeValue'].sum()
+    total_trade = imports_total + exports_total
+    
+    # Top importers (top 5)
+    top_importers = year_data[year_data['Action'] == 'Import'].groupby('Country')['TradeValue'].sum().nlargest(5)
+    # Top exporters (top 5)
+    top_exporters = year_data[year_data['Action'] == 'Export'].groupby('Country')['TradeValue'].sum().nlargest(5)
+    
+    return {
+        "type": "year_summary",
+        "year": year,
+        "total_trade": total_trade,
+        "total_trade_formatted": format_human_readable(total_trade),
+        "imports": imports_total,
+        "imports_formatted": format_human_readable(imports_total),
+        "exports": exports_total,
+        "exports_formatted": format_human_readable(exports_total),
+        "top_importers": [(country, format_human_readable(value)) for country, value in top_importers.items()],
+        "top_exporters": [(country, format_human_readable(value)) for country, value in top_exporters.items()],
+        "num_countries": year_data['Country'].nunique()
+    }
+
 # ------------------------
 # Main Answer Function with Real Data Analysis
 # ------------------------
@@ -215,25 +323,85 @@ def answer_question(user_question, df):
     # Extract years from question
     years = [int(token) for token in user_question.split() if token.isdigit() and len(token) == 4]
     
-    # Extract continent filter
-    continents = ["Africa", "Europe", "Asia", "North America", "South America", "Oceania"]
-    continent = None
-    for cont in continents:
-        if cont.lower() in question_lower:
-            continent = cont
+    # Extract countries and continents
+    mentioned_countries = extract_countries_from_question(user_question, df)
+    mentioned_continents = extract_continents_from_question(user_question)
     
-    # Apply filters
+    # Legacy continent filter (keep for backwards compatibility)
+    continent = mentioned_continents[0] if mentioned_continents else None
+    
+    # Apply basic filters
     df_filtered = df.copy()
-    if continent:
+    if continent and len(mentioned_continents) == 1:
         df_filtered = df_filtered[df_filtered["Continent"] == continent]
-    if years:
+    if years and not any(word in question_lower for word in ["compare", "vs", "versus", "between"]):
         df_filtered = df_filtered[df_filtered["Year"].isin(years)]
     
     # Perform actual data analysis based on question type
     analysis_result = None
     
+    # Multi-entity comparison detection
+    is_comparison = any(word in question_lower for word in ["compare", "vs", "versus", "between", "difference"])
+    
+    # Country vs Country comparison
+    if is_comparison and len(mentioned_countries) >= 2:
+        country1, country2 = mentioned_countries[0], mentioned_countries[1]
+        # Filter by years if specified
+        compare_df = df.copy()
+        if years:
+            compare_df = compare_df[compare_df['Year'].isin(years)]
+        analysis_result = compare_entities(compare_df, country1, country2, "country")
+    
+    # Continent vs Continent comparison
+    elif is_comparison and len(mentioned_continents) >= 2:
+        continent1, continent2 = mentioned_continents[0], mentioned_continents[1]
+        # Filter by years if specified
+        compare_df = df.copy()
+        if years:
+            compare_df = compare_df[compare_df['Year'].isin(years)]
+        analysis_result = compare_entities(compare_df, continent1, continent2, "continent")
+    
+    # Year vs Year comparison
+    elif is_comparison and len(years) >= 2:
+        year1, year2 = years[0], years[1]
+        # Filter by country/continent if specified
+        compare_df = df.copy()
+        if mentioned_countries:
+            compare_df = compare_df[compare_df['Country'].isin(mentioned_countries)]
+        elif mentioned_continents:
+            compare_df = compare_df[compare_df['Continent'].isin(mentioned_continents)]
+        analysis_result = compare_entities(compare_df, year1, year2, "year")
+    
+    # Import vs Export comparison queries
+    elif any(word in question_lower for word in ["compare import", "compare export", "import vs export", "export vs import", "imports and exports"]):
+        # Calculate import and export totals
+        imports_total = df_filtered[df_filtered['Action'] == 'Import']['TradeValue'].sum()
+        exports_total = df_filtered[df_filtered['Action'] == 'Export']['TradeValue'].sum()
+        difference = exports_total - imports_total
+        
+        if imports_total > 0:
+            ratio_pct = ((exports_total - imports_total) / imports_total) * 100
+        else:
+            ratio_pct = 0
+        
+        trade_balance = "net exporter" if exports_total > imports_total else "net importer" if imports_total > exports_total else "balanced"
+        
+        analysis_result = {
+            "type": "import_export_comparison",
+            "imports": imports_total,
+            "imports_formatted": format_human_readable(imports_total),
+            "exports": exports_total,
+            "exports_formatted": format_human_readable(exports_total),
+            "difference": abs(difference),
+            "difference_formatted": format_human_readable(abs(difference)),
+            "trade_balance": trade_balance,
+            "ratio_pct": abs(ratio_pct),
+            "continent": continent,
+            "years": years if years else "1995-2021"
+        }
+    
     # Lowest/Highest queries
-    if "lowest" in question_lower:
+    elif "lowest" in question_lower:
         if "import" in question_lower:
             analysis_result = analyze_lowest_highest(df_filtered, "lowest", "Import")
         elif "export" in question_lower:
@@ -254,6 +422,30 @@ def answer_question(user_question, df):
     # Year range analysis
     elif len(years) >= 2 and any(word in question_lower for word in ["between", "from", "compare", "trend", "change"]):
         analysis_result = analyze_year_range(df_filtered, min(years), max(years))
+    
+    # Single year trend/summary (e.g., "what was the trend in 2000" or "analyze 2000")
+    elif len(years) == 1 and any(word in question_lower for word in ["trend", "summary", "what happened", "overview", "analyze", "analysis"]):
+        analysis_result = analyze_year_summary(df_filtered if continent else df, years[0])
+    
+    # Continent/Region analysis (e.g., "analyze trade value for Africa")
+    elif continent and any(word in question_lower for word in ["analyze", "analysis", "trade value"]) and not mentioned_countries:
+        # Provide comprehensive continent summary
+        imports_total = df_filtered[df_filtered['Action'] == 'Import']['TradeValue'].sum()
+        exports_total = df_filtered[df_filtered['Action'] == 'Export']['TradeValue'].sum()
+        total_trade = imports_total + exports_total
+        
+        analysis_result = {
+            "type": "continent_analysis",
+            "continent": continent,
+            "total_trade": total_trade,
+            "total_trade_formatted": format_human_readable(total_trade),
+            "imports": imports_total,
+            "imports_formatted": format_human_readable(imports_total),
+            "exports": exports_total,
+            "exports_formatted": format_human_readable(exports_total),
+            "countries": df_filtered['Country'].nunique(),
+            "years": years if years else "1995-2021"
+        }
     
     # Country-specific queries
     else:
@@ -299,11 +491,22 @@ Instructions:
 - Answer directly and naturally
 - Use the exact numbers from the analysis result
 - Be specific (mention country names, values, years)
-- Keep it concise (1-2 sentences)
+- For import/export comparisons, structure the response as:
+  * Total imports: [value]
+  * Total exports: [value]
+  * Trade balance: [difference] ([region] is a [net exporter/importer])
+  * Ratio: [percentage comparison]
+- For entity comparisons (country/continent/year), structure as:
+  * Entity 1: [name] with [value]
+  * Entity 2: [name] with [value]
+  * Comparison: [higher entity] has [percentage]% more than [lower entity]
+- For year summaries, provide overview of imports, exports, and top countries
+- Keep it concise (2-4 sentences for comparisons, 1-2 for other queries)
 - Don't add extra information not in the data
 - Don't use markdown formatting
 
 Example: "Russia had the highest exports with $523.4B in total trade value."
+Example comparison: "Nigeria's total trade was $1.45T compared to Algeria's $892.3B. Nigeria had 62.5% more trade value than Algeria."
 """
 
         try:
@@ -319,7 +522,67 @@ Example: "Russia had the highest exports with $523.4B in total trade value."
             return f"Analysis complete: {analysis_result}"
     else:
         # Format result without AI
-        if "country" in analysis_result:
+        result_type = analysis_result.get("type", "")
+        
+        if result_type == "import_export_comparison":
+            # Format import/export comparison result
+            continent_text = f" for {analysis_result['continent']}" if analysis_result.get('continent') else ""
+            years_text = f" ({analysis_result['years']})" if analysis_result.get('years') else ""
+            
+            result = f"**Crude Oil Trade Comparison{continent_text}{years_text}:**\n"
+            result += f"• Total Imports: {analysis_result['imports_formatted']}\n"
+            result += f"• Total Exports: {analysis_result['exports_formatted']}\n"
+            result += f"• Trade Balance: {analysis_result['difference_formatted']} difference\n"
+            result += f"• Status: {analysis_result['trade_balance'].title()}\n"
+            result += f"• Ratio: Exports are {analysis_result['ratio_pct']:.1f}% {'higher' if analysis_result['exports'] > analysis_result['imports'] else 'lower'} than imports"
+            return result
+            
+        elif result_type in ["country_comparison", "continent_comparison", "year_comparison"]:
+            # Format entity comparison result
+            entity_type = result_type.replace("_comparison", "").title()
+            result = f"**{entity_type} Comparison:**\n"
+            result += f"• {analysis_result['entity1']}: {analysis_result['value1_formatted']}\n"
+            result += f"• {analysis_result['entity2']}: {analysis_result['value2_formatted']}\n"
+            result += f"• Difference: {analysis_result['difference_formatted']}\n"
+            result += f"• {analysis_result['higher']} has {analysis_result['pct_diff']:.1f}% more trade value than {analysis_result['lower']}"
+            return result
+            
+        elif result_type == "year_summary":
+            # Format year summary result
+            result = f"**Crude Oil Trade Summary for {analysis_result['year']}:**\n"
+            result += f"• Total Trade: {analysis_result['total_trade_formatted']}\n"
+            result += f"• Total Imports: {analysis_result['imports_formatted']}\n"
+            result += f"• Total Exports: {analysis_result['exports_formatted']}\n"
+            result += f"• Countries: {analysis_result['num_countries']}\n\n"
+            result += f"**Top 5 Importers:**\n"
+            for i, (country, value) in enumerate(analysis_result['top_importers'], 1):
+                result += f"{i}. {country}: {value}\n"
+            result += f"\n**Top 5 Exporters:**\n"
+            for i, (country, value) in enumerate(analysis_result['top_exporters'], 1):
+                result += f"{i}. {country}: {value}"
+            return result
+            
+        elif result_type == "continent_analysis":
+            # Format continent analysis result
+            years_text = f" ({analysis_result['years']})" if analysis_result.get('years') != "1995-2021" else " (1995-2021)"
+            result = f"**{analysis_result['continent']} Crude Oil Trade Analysis{years_text}:**\n"
+            result += f"• Total Trade Value: {analysis_result['total_trade_formatted']}\n"
+            result += f"• Total Imports: {analysis_result['imports_formatted']}\n"
+            result += f"• Total Exports: {analysis_result['exports_formatted']}\n"
+            result += f"• Number of Countries: {analysis_result['countries']}\n"
+            
+            # Calculate trade balance
+            if analysis_result['exports'] > analysis_result['imports']:
+                balance_pct = ((analysis_result['exports'] - analysis_result['imports']) / analysis_result['imports']) * 100
+                result += f"• Trade Status: Net Exporter (exports {balance_pct:.1f}% higher than imports)"
+            elif analysis_result['imports'] > analysis_result['exports']:
+                balance_pct = ((analysis_result['imports'] - analysis_result['exports']) / analysis_result['exports']) * 100
+                result += f"• Trade Status: Net Importer (imports {balance_pct:.1f}% higher than exports)"
+            else:
+                result += f"• Trade Status: Balanced"
+            return result
+            
+        elif "country" in analysis_result:
             country = analysis_result["country"]
             value = analysis_result.get("value_formatted") or analysis_result.get("total_formatted", "")
             action = analysis_result.get("action", "trade")
