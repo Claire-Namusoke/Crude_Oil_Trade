@@ -334,6 +334,9 @@ def answer_question(user_question, df):
     df_filtered = df.copy()
     if continent and len(mentioned_continents) == 1:
         df_filtered = df_filtered[df_filtered["Continent"] == continent]
+    if mentioned_countries and len(mentioned_countries) == 1 and not any(word in question_lower for word in ["compare", "vs", "versus"]):
+        # Filter to single country if mentioned (but not for country A vs country B comparisons)
+        df_filtered = df_filtered[df_filtered["Country"] == mentioned_countries[0]]
     if years and not any(word in question_lower for word in ["compare", "vs", "versus", "between"]):
         df_filtered = df_filtered[df_filtered["Year"].isin(years)]
     
@@ -373,7 +376,7 @@ def answer_question(user_question, df):
         analysis_result = compare_entities(compare_df, year1, year2, "year")
     
     # Import vs Export comparison queries
-    elif any(word in question_lower for word in ["compare import", "compare export", "import vs export", "export vs import", "imports and exports"]):
+    elif any(word in question_lower for word in ["compare import", "compare export", "import vs export", "export vs import", "imports and exports", "imports versus exports"]):
         # Calculate import and export totals
         imports_total = df_filtered[df_filtered['Action'] == 'Import']['TradeValue'].sum()
         exports_total = df_filtered[df_filtered['Action'] == 'Export']['TradeValue'].sum()
@@ -386,8 +389,16 @@ def answer_question(user_question, df):
         
         trade_balance = "net exporter" if exports_total > imports_total else "net importer" if imports_total > exports_total else "balanced"
         
+        # Determine what entity we're analyzing
+        entity_name = None
+        if mentioned_countries and len(mentioned_countries) == 1:
+            entity_name = mentioned_countries[0]
+        elif continent:
+            entity_name = continent
+        
         analysis_result = {
             "type": "import_export_comparison",
+            "entity": entity_name,
             "imports": imports_total,
             "imports_formatted": format_human_readable(imports_total),
             "exports": exports_total,
@@ -526,10 +537,12 @@ Example comparison: "Nigeria's total trade was $1.45T compared to Algeria's $892
         
         if result_type == "import_export_comparison":
             # Format import/export comparison result
-            continent_text = f" for {analysis_result['continent']}" if analysis_result.get('continent') else ""
-            years_text = f" ({analysis_result['years']})" if analysis_result.get('years') else ""
+            entity_text = f" for {analysis_result['entity']}" if analysis_result.get('entity') else ""
+            if not entity_text and analysis_result.get('continent'):
+                entity_text = f" for {analysis_result['continent']}"
+            years_text = f" ({analysis_result['years']})" if analysis_result.get('years') != "1995-2021" else " (1995-2021)"
             
-            result = f"**Crude Oil Trade Comparison{continent_text}{years_text}:**\n"
+            result = f"**Crude Oil Trade Comparison{entity_text}{years_text}:**\n"
             result += f"• Total Imports: {analysis_result['imports_formatted']}\n"
             result += f"• Total Exports: {analysis_result['exports_formatted']}\n"
             result += f"• Trade Balance: {analysis_result['difference_formatted']} difference\n"
