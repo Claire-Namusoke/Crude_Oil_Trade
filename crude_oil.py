@@ -11,42 +11,62 @@ import os
 import re
 import subprocess
 
+# --- Page Configuration (MUST be first Streamlit command) ---
+st.set_page_config(
+    page_title="🌍 Global Crude Oil Trade Dashboard (1995-2021)",
+    page_icon="🛢️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # AI imports
+openai_init_message = None
+openai_message_type = None
+
 try:
     import openai
     from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    st.warning("⚠️ AI libraries not installed. AI features will use fallback analysis.")
+    openai_init_message = "⚠️ AI libraries not installed. AI features will use fallback analysis."
+    openai_message_type = "warning"
 
 # Set up OpenAI client if available
 if OPENAI_AVAILABLE:
     # Read API key from Streamlit Cloud secrets
     try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        if api_key and len(api_key) > 0:
-            client = OpenAI(api_key=api_key)  # type: ignore
-            AI_ENABLED = True
+        # Check if secrets are available before accessing
+        if hasattr(st, 'secrets') and len(st.secrets) > 0:
+            api_key = st.secrets.get("OPENAI_API_KEY", None)
+            if api_key and len(api_key) > 0:
+                client = OpenAI(api_key=api_key)  # type: ignore
+                AI_ENABLED = True
+            else:
+                client = None
+                AI_ENABLED = False
+                openai_init_message = "🔑 OpenAI API key is empty in Streamlit secrets"
+                openai_message_type = "error"
         else:
-            pass
+            # No secrets available (local dev)
             client = None
             AI_ENABLED = False
-            st.error("🔑 OpenAI API key is empty in Streamlit secrets")
-    except KeyError:
-        # Key not found in secrets
+    except (KeyError, FileNotFoundError, AttributeError):
+        # Key not found in secrets or secrets.toml doesn't exist (local dev without secrets)
+        # Silently disable AI - no message needed for local development
         client = None
         AI_ENABLED = False
-        st.error("🔑 OPENAI_API_KEY not found in Streamlit Cloud secrets. Please add it in Settings → Secrets")
     except Exception as e:
         # Other initialization errors
         client = None
         AI_ENABLED = False
-        st.error(f"❌ OpenAI initialization failed: {str(e)}")
+        openai_init_message = f"❌ OpenAI initialization failed: {str(e)}"
+        openai_message_type = "error"
 else:
     client = None
     AI_ENABLED = False
-    st.error("❌ OpenAI library not installed")
+    openai_init_message = "❌ OpenAI library not installed"
+    openai_message_type = "error"
 
 # --- Utility Functions ---
 
@@ -308,14 +328,6 @@ Example: "Russia had the highest exports with $523.4B in total trade value."
         else:
             return f"Analysis result: {analysis_result}"
 
-
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="🌍 Global Crude Oil Trade Dashboard (1995-2021)",
-    page_icon="🛢️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # --- Custom CSS for Deep Black Theme ---
 st.markdown("""
@@ -795,6 +807,15 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Display OpenAI initialization message if any
+if openai_init_message:
+    if openai_message_type == "error":
+        st.error(openai_init_message)
+    elif openai_message_type == "warning":
+        st.warning(openai_init_message)
+    elif openai_message_type == "info":
+        st.info(openai_init_message)
 
 # --- Data Loading Function ---
 @st.cache_data(ttl=300)  # Cache for 5 minutes
